@@ -1,0 +1,85 @@
+1 Aesi, Tyrant of Gyre Strait
+1 Aether Gale
+1 Arcane Denial
+1 Arcane Signet
+1 Arixmethes, Slumbering Isle
+1 Ash Barrens
+1 Beast Within
+1 Benthic Anomaly
+1 Breeding Pool
+1 Castle Vantress
+1 Coiling Oracle
+1 Command Tower
+1 Counterspell
+1 Cultivate
+1 Dig Through Time
+1 Drownyard Temple
+1 Eureka Moment
+1 Evolving Wilds
+1 Explore
+1 Explosive Vegetation
+1 Farseek
+1 Flooded Grove
+9 Forest
+1 Garruk's Uprising
+1 Gilded Lotus
+1 Glacier Godmaw
+1 Growth Spiral
+1 Hinterland Harbor
+1 Hullbreaker Horror
+1 Invasion of Segovia
+8 Island
+1 Junk Winder
+1 Kindred Discovery
+1 Kiora, Behemoth Beckoner
+1 Kiora, Sovereign of the Deep
+1 Kodama's Reach
+1 Koma, Cosmos Serpent
+1 Koma, World-Eater
+1 Mosswort Bridge
+1 Myriad Landscape
+1 Mystic Snake
+1 Nature's Lore
+1 Otawara, Soaring City
+1 Overflowing Basin
+1 Oversimplify
+1 Overwhelming Stampede
+1 Parallel Lives
+1 Planar Genesis
+1 Pongify
+1 Quandrix Campus
+1 Rampant Growth
+1 Rapid Hybridization
+1 Reality Shift
+1 Reclamation Sage
+1 Reliquary Tower
+1 Return of the Wildspeaker
+1 Ripples of Potential
+1 River Serpent
+1 Rogue's Passage
+1 Sakura-Tribe Elder
+1 Scourge of Fleets
+1 Serpent of the Pass
+1 Serpent of Yawning Depths
+1 Simic Growth Chamber
+1 Simic Signet
+1 Slinn Voda, the Rising Deep
+1 Sol Ring
+1 Spawning Kraken
+1 Stormsurge Kraken
+1 Stormtide Leviathan
+1 Striped Riverwinder
+1 Summon: Leviathan
+1 Tangled Islet
+1 Tatyova, Benthic Druid
+1 Temple of Mystery
+1 Temple of the False God
+1 Terramorphic Expanse
+1 Thassa, God of the Sea
+1 The Unagi of Kyoshi Island
+1 Thornwood Falls
+1 Vineglimmer Snarl
+1 Whelming Wave
+1 Wilderness Reclamation
+1 Xolatoyac, the Smiling Flood
+1 Yavimaya Coast

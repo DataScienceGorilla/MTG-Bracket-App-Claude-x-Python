@@ -1,0 +1,100 @@
+# Sample Commander Deck - Yuriko Ninja Tribal
+# This is a Bracket 3-4 deck due to Game Changers
+
+// Commander
+1 Yuriko, the Tiger's Shadow
+
+// Creatures - Ninjas and Evasive
+1 Changeling Outcast
+1 Faerie Seer
+1 Mothdust Changeling
+1 Ornithopter
+1 Slither Blade
+1 Tormented Soul
+1 Mist-Cloaked Herald
+1 Triton Shorestalker
+1 Gudul Lurker
+1 Ingenious Infiltrator
+1 Ninja of the Deep Hours
+1 Throat Slitter
+1 Mistblade Shinobi
+1 Moonblade Shinobi
+1 Silent-Blade Oni
+1 Sakashima's Student
+1 Fallen Shinobi
+1 Ink-Eyes, Servant of Oni
+
+// Card Advantage
+1 Rhystic Study
+1 Mystic Remora
+1 Phyrexian Arena
+1 Bolas's Citadel
+1 Necropotence
+
+// Tutors
+1 Vampiric Tutor
+1 Demonic Tutor
+1 Mystical Tutor
+1 Imperial Seal
+
+// Top Deck Manipulation
+1 Brainstorm
+1 Ponder
+1 Preordain
+1 Sensei's Divining Top
+1 Scroll Rack
+1 Lim-Dul's Vault
+
+// High CMC for Yuriko Triggers
+1 Draco
+1 Blinkmoth Infusion
+1 Temporal Trespass
+1 Treasure Cruise
+1 Dig Through Time
+
+// Interaction
+1 Cyclonic Rift
+1 Force of Will
+1 Fierce Guardianship
+1 Deadly Rollick
+1 Swan Song
+1 Counterspell
+1 Drown in the Loch
+1 Fatal Push
+1 Toxic Deluge
+
+// Ramp
+1 Sol Ring
+1 Arcane Signet
+1 Dimir Signet
+1 Talisman of Dominance
+1 Chrome Mox
+1 Mox Diamond
+1 Mana Vault
+
+// Lands (36)
+1 Command Tower
+1 Watery Grave
+1 Underground Sea
+1 Polluted Delta
+1 Misty Rainforest
+1 Scalding Tarn
+1 Bloodstained Mire
+1 Marsh Flats
+1 Verdant Catacombs
+1 Morphic Pool
+1 Drowned Catacomb
+1 Darkslick Shores
+1 Sunken Ruins
+1 Underground River
+1 River of Tears
+1 Creeping Tar Pit
+1 Fetid Pools
+1 Temple of Deceit
+1 Clearwater Pathway
+1 Otawara, Soaring City
+1 Takenuma, Abandoned Mire
+1 Ancient Tomb
+1 Urza's Saga
+7 Island
+6 Swamp

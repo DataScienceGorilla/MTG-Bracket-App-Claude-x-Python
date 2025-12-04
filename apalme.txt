@@ -1,0 +1,95 @@
+1 Adaptive Automaton
+1 Aether Gale
+1 Arcane Adaptation
+1 Arcane Signet
+1 Banner of Kinship
+1 Bedevil
+1 Blasphemous Act
+1 Blightstep Pathway
+1 Blood Crypt
+1 Bloodchief Ascension
+1 Chaos Defiler
+1 Chief of the Foundry
+1 Clearwater Pathway
+1 Coalstoke Gearhulk
+1 Combustible Gearhulk
+1 Command Tower
+1 Counterspell
+1 Cranial Plating
+1 Crumbling Necropolis
+1 Crypt of the Eternals
+1 Cryptothrall
+1 Cybermen Squadron
+1 Cyclonic Rift
+1 Deadly Rollick
+1 Depthshaker Titan
+1 Desynchronization
+1 Dimir Signet
+1 Dr. Eggman
+1 Dragonskull Summit
+1 Drossforge Bridge
+1 Drowned Catacomb
+1 Exotic Orchard
+1 Fell the Profane
+1 Foundry Inspector
+1 Geth's Grimoire
+1 Great Furnace
+3 Island
+1 Izzet Signet
+1 Kindred Dominance
+1 Leyline of Transformation
+1 Lifecraft Engine
+1 Liliana's Caress
+1 Maskwood Nexus
+1 Megrim
+1 Missy
+1 Mistvault Bridge
+2 Mountain
+1 Myr Battlesphere
+1 Nautiloid Ship
+1 Noxious Gearhulk
+1 Oildeep Gearhulk
+1 Overkill
+1 Padeem, Consul of Innovation
+1 Patchwork Banner
+1 PuPu UFO
+1 Rakdos Signet
+1 Reanimate
+1 Reliquary Tower
+1 Rhystic Study
+1 Riverglide Pathway
+1 Rogue's Passage
+1 Ruin Grinder
+1 Scavenged Brawler
+1 Scrap Trawler
+1 Scrawling Crawler
+1 Seat of the Synod
+1 Seething Landscape
+1 Silverbluff Bridge
+1 Sol Ring
+1 Soul Manipulation
+1 Spark Double
+1 Starting Town
+1 Steam Vents
+1 Steel Overseer
+1 Strionic Resonator
+1 Sulfur Falls
+3 Swamp
+1 Swan Song
+1 Talisman of Creativity
+1 Talisman of Dominance
+1 Temple of Deceit
+1 Temple of Epiphany
+1 Temple of Malice
+1 Tergrid, God of Fright
+1 Terminate
+1 Tezzeret, Master of the Bridge
+1 The Regalia
+1 Thought Monitor
+1 Vandalblast
+1 Vault of Whispers
+1 Walking Atlas
+1 Waste Not
+1 Watery Grave
+1 Withering Torment
+1 Xander's Lounge
