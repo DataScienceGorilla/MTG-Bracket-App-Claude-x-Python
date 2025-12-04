@@ -11,13 +11,14 @@ human-readable insights about:
 - What the deck's strengths and weaknesses are
 - Recommendations for adjusting the bracket
 
-This goes beyond simple calculation - it tries to understand
-the deck the way an experienced player would.
+IMPORTANT: We include actual oracle text from Scryfall in our prompts
+to ensure Claude reasons from the real card text, not its (sometimes
+inaccurate) memory of what cards do.
 """
 
 import os
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from dataclasses import asdict
 
 # We'll use the Anthropic SDK for Claude API calls
@@ -32,6 +33,41 @@ except ImportError:
 from config import CLAUDE_MODEL, CLAUDE_MAX_TOKENS, BRACKET_DEFINITIONS
 from deck_analyzer import DeckAnalysis
 
+# Import our Commander Spellbook client for verified combo data
+try:
+    from combos import SpellbookClient, DeckCombos, format_combos_for_prompt
+    SPELLBOOK_AVAILABLE = True
+except ImportError:
+    SPELLBOOK_AVAILABLE = False
+    print("⚠️  spellbook_client not found - combo detection will be AI-only")
+
+
+# ============================================================================
+# Cards we don't need to include oracle text for (Claude knows these well,
+# and skipping them saves tokens). Add more as needed.
+# ============================================================================
+WELL_KNOWN_CARDS = {
+    # Basic lands
+    "plains", "island", "swamp", "mountain", "forest", "wastes",
+    "snow-covered plains", "snow-covered island", "snow-covered swamp",
+    "snow-covered mountain", "snow-covered forest",
+    
+    # Ultra-common mana rocks that never change
+    "sol ring", "arcane signet", "command tower", "commander's sphere",
+    "mind stone", "thought vessel", "fellwar stone",
+    
+    # Common signets (all work the same way)
+    "azorius signet", "dimir signet", "rakdos signet", "gruul signet",
+    "selesnya signet", "orzhov signet", "izzet signet", "golgari signet",
+    "boros signet", "simic signet",
+    
+    # Common talismans
+    "talisman of dominance", "talisman of progress", "talisman of indulgence",
+    "talisman of impulse", "talisman of unity", "talisman of hierarchy",
+    "talisman of creativity", "talisman of resilience", "talisman of conviction",
+    "talisman of curiosity",
+}
+
 
 class AIPlayAnalyzer:
     """
@@ -39,6 +75,9 @@ class AIPlayAnalyzer:
     
     This is the "brain" that turns raw card data into understanding
     about how a deck actually functions.
+    
+    Key improvement: We now include actual oracle text in prompts so
+    Claude doesn't have to rely on its training data (which can be wrong).
     """
     
     def __init__(self, api_key: str = None):
@@ -73,6 +112,8 @@ class AIPlayAnalyzer:
         This is the main function that creates human-readable insights
         about the deck's strategy, play patterns, and feel.
         
+        Now includes verified combo data from Commander Spellbook!
+        
         Args:
             deck: The DeckAnalysis object from the deck analyzer
         
@@ -84,42 +125,75 @@ class AIPlayAnalyzer:
         
         print("  🤖 Generating AI play pattern analysis...")
         
-        # Build a summary of the deck for Claude
-        deck_summary = self._build_deck_summary(deck)
+        # Build the card reference section with oracle text
+        card_reference = self._build_card_reference(deck)
         
-        # Create the prompt
-        prompt = f"""You are an expert Magic: The Gathering Commander analyst. 
-You're helping a player understand their deck better for the new WotC bracket system.
+        # Build the deck overview (stats, composition)
+        deck_overview = self._build_deck_overview(deck)
+        
+        # NEW: Fetch verified combos from Commander Spellbook
+        combo_section = self._fetch_combo_data(deck)
+        
+        # Create the prompt with explicit instructions to use provided text
+        prompt = f"""You are an expert Magic: The Gathering Commander analyst helping a player understand their deck for the WotC bracket system.
 
-Here's the deck information:
+CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. You MUST use ONLY this provided text to understand what each card does. Do NOT rely on your memory of cards, as it may be outdated or incorrect. If a card's text isn't provided, you may use general knowledge, but prefer the provided text.
 
-{deck_summary}
+---
+CARD REFERENCE (Use these exact oracle texts):
+---
 
-Please provide a comprehensive but conversational analysis covering:
+{card_reference}
+
+---
+DECK OVERVIEW:
+---
+
+{deck_overview}
+
+---
+{combo_section}
+---
+
+---
+ANALYSIS REQUEST:
+---
+
+Based on the oracle text and verified combo data provided above, please analyze this deck:
 
 1. **How This Deck Plays** (2-3 paragraphs)
    - What's the gameplan from turns 1-3? Turns 4-6? Late game?
-   - What does a "good draw" look like for this deck?
+   - What does a "good draw" look like for this deck? As a reminder, the commander is always available in the command zone, and effectively an 8th card in the opening hand.
    - How interactive is it? Does it want to race or control?
 
 2. **Win Conditions** (brief list)
    - Primary way(s) to close out games
    - Backup plans if primary fails
+   - Reference the VERIFIED COMBOS section if combos are a win condition
 
 3. **Key Cards & Synergies**
-   - What are the 3-5 most important cards?
-   - What combinations create the most value?
+   - What are the 3-5 most important non-land cards?
+   - What card combinations create the most value or threaten wins?
+   - For any combos mentioned, refer to the VERIFIED COMBOS section
 
-4. **Strengths & Weaknesses**
+4. **Combo Analysis**
+   - Explain how the verified combos fit into this deck's gameplan
+   - Are they primary win conditions or backups?
+   - Are they early-game, mid-game, or late-game?
+   - How many pieces are needed?
+   - How easy are they to assemble? What tutors/draw help find pieces?
+   - IMPORTANT: Only discuss combos listed in VERIFIED COMBOS - do not invent new ones
+
+5. **Strengths & Weaknesses**
    - What matchups/situations does this deck excel in?
-   - What are its vulnerabilities?
+   - What are its vulnerabilities? (e.g., graveyard hate, board wipes, etc.)
 
-5. **Bracket Assessment**
-   - Based on how this deck *actually plays*, does the suggested bracket of {deck.suggested_bracket} seem right?
-   - Any nuance? (e.g., "This is technically bracket 3 due to Game Changers, but plays like a bracket 2 deck in practice")
+6. **Bracket Assessment**
+   - Based on how this deck *actually plays*, does Bracket {deck.suggested_bracket} seem right?
+   - Factor in the combo power level from the verified combos
+   - Any nuance? (e.g., "Technically bracket 3 due to Game Changers, but plays like bracket 2")
 
-Keep the tone friendly and helpful - like explaining to someone at a game store.
-Use specific card names when discussing synergies."""
+Keep the tone friendly and helpful - like explaining to someone at a game store. Reference specific cards by name when discussing synergies."""
 
         try:
             # Call Claude API
@@ -158,15 +232,35 @@ Use specific card names when discussing synergies."""
         
         print(f"  🤖 Generating advice to adjust to bracket {target_bracket}...")
         
-        deck_summary = self._build_deck_summary(deck)
+        # Build references
+        card_reference = self._build_card_reference(deck)
+        deck_overview = self._build_deck_overview(deck)
+        
         current = deck.suggested_bracket
         target_def = BRACKET_DEFINITIONS.get(target_bracket, {})
-        
         direction = "down" if target_bracket < current else "up"
         
         prompt = f"""You are an expert Magic: The Gathering Commander deckbuilder.
 
-A player wants to adjust their deck from Bracket {current} to Bracket {target_bracket}.
+CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. Use ONLY this provided text to understand what each card does - do not rely on your memory.
+
+---
+CARD REFERENCE:
+---
+
+{card_reference}
+
+---
+DECK OVERVIEW:
+---
+
+{deck_overview}
+
+---
+ADJUSTMENT REQUEST:
+---
+
+The player wants to adjust this deck from Bracket {current} to Bracket {target_bracket}.
 
 Bracket {target_bracket} ({target_def.get('name', 'Unknown')}) expectations:
 - Game Changers allowed: {target_def.get('game_changers_allowed', 'Unknown')}
@@ -174,18 +268,16 @@ Bracket {target_bracket} ({target_def.get('name', 'Unknown')}) expectations:
 - Mass land denial: {'Allowed' if target_def.get('mass_land_denial') else 'Not allowed'}
 - Expected game length: {target_def.get('expected_game_length', 'Unknown')}
 
-Current deck:
-{deck_summary}
-
 Please provide specific, actionable advice:
 
 1. **Cards to Remove** (if moving {direction})
    - List specific cards from this deck that should come out
-   - Explain why each is problematic for the target bracket
+   - Reference their oracle text to explain why they're problematic
 
 2. **Cards to Consider Adding**
    - Suggest 5-10 replacement cards that fit the target bracket
    - These should maintain the deck's core strategy where possible
+   - For each suggestion, briefly explain what it does
 
 3. **Strategy Adjustments**
    - Any changes to how the deck should be played at this bracket
@@ -208,12 +300,86 @@ Keep it practical and specific to THIS deck."""
             print(f"  ❌ API error: {e}")
             return self._generate_fallback_bracket_advice(deck, target_bracket)
     
-    def _build_deck_summary(self, deck: DeckAnalysis) -> str:
+    def _build_card_reference(self, deck: DeckAnalysis) -> str:
         """
-        Build a text summary of the deck for the AI prompt.
+        Build a reference section with oracle text for all non-trivial cards.
         
-        This formats the deck data in a way that's easy for
-        Claude to understand and analyze.
+        This is the key improvement - we give Claude the actual card text
+        so it doesn't have to guess or rely on potentially wrong memories.
+        
+        We skip well-known simple cards (Sol Ring, basic lands) to save tokens.
+        """
+        lines = []
+        seen_cards = set()  # Avoid duplicates
+        
+        # Process all card categories
+        all_cards = (
+            deck.creatures + 
+            deck.artifacts + 
+            deck.enchantments + 
+            deck.instants + 
+            deck.sorceries + 
+            deck.planeswalkers +
+            deck.lands
+        )
+        
+        for card in all_cards:
+            name = card.get("name", "Unknown")
+            name_lower = name.lower()
+            
+            # Skip if we've already added this card
+            if name_lower in seen_cards:
+                continue
+            seen_cards.add(name_lower)
+            
+            # Skip well-known cards to save tokens
+            if name_lower in WELL_KNOWN_CARDS:
+                continue
+            
+            # Skip basic lands (they don't have oracle text anyway)
+            type_line = card.get("type_line", "").lower()
+            if "basic" in type_line and "land" in type_line:
+                continue
+            
+            # Get card details
+            oracle_text = card.get("oracle_text", "")
+            mana_cost = card.get("mana_cost", "")
+            
+            # Format the card entry
+            lines.append(f"[{name}]")
+            lines.append(f"Type: {card.get('type_line', 'Unknown')}")
+            
+            if mana_cost:
+                lines.append(f"Cost: {mana_cost}")
+            
+            # Include power/toughness for creatures
+            power = card.get("power")
+            toughness = card.get("toughness")
+            if power is not None and toughness is not None:
+                lines.append(f"P/T: {power}/{toughness}")
+            
+            # Include loyalty for planeswalkers
+            loyalty = card.get("loyalty")
+            if loyalty is not None:
+                lines.append(f"Loyalty: {loyalty}")
+            
+            if oracle_text:
+                lines.append(f"Text: {oracle_text}")
+            else:
+                lines.append("Text: (no rules text)")
+            
+            lines.append("")  # Blank line between cards
+        
+        if not lines:
+            return "(No detailed card data available - using card names only)"
+        
+        return "\n".join(lines)
+    
+    def _build_deck_overview(self, deck: DeckAnalysis) -> str:
+        """
+        Build a summary of deck statistics and composition.
+        
+        This provides context about the deck without repeating oracle text.
         """
         lines = []
         
@@ -229,45 +395,84 @@ Keep it practical and specific to THIS deck."""
         lines.append(f"- Game Changers ({deck.game_changers_count}): {', '.join(deck.game_changers_found) or 'None'}")
         lines.append(f"- Mass Land Denial: {', '.join(deck.mass_land_denial_cards) or 'None'}")
         lines.append(f"- Extra Turn Cards: {', '.join(deck.extra_turn_cards) or 'None'}")
-        lines.append(f"- Tutors ({len(deck.tutor_cards)}): {', '.join(deck.tutor_cards[:5])}{'...' if len(deck.tutor_cards) > 5 else ''}")
+        lines.append(f"- Tutors ({len(deck.tutor_cards)}): {', '.join(deck.tutor_cards[:5])}{'...' if len(deck.tutor_cards) > 5 else '' if deck.tutor_cards else 'None'}")
         lines.append(f"- Suggested Bracket: {deck.suggested_bracket}")
         lines.append("")
         
-        # Card composition
-        lines.append("**Deck Composition:**")
-        lines.append(f"- Creatures ({len(deck.creatures)}): {self._summarize_cards(deck.creatures)}")
-        lines.append(f"- Artifacts ({len(deck.artifacts)}): {self._summarize_cards(deck.artifacts)}")
-        lines.append(f"- Enchantments ({len(deck.enchantments)}): {self._summarize_cards(deck.enchantments)}")
-        lines.append(f"- Instants ({len(deck.instants)}): {self._summarize_cards(deck.instants)}")
-        lines.append(f"- Sorceries ({len(deck.sorceries)}): {self._summarize_cards(deck.sorceries)}")
-        lines.append(f"- Planeswalkers ({len(deck.planeswalkers)}): {self._summarize_cards(deck.planeswalkers)}")
-        lines.append(f"- Lands ({len(deck.lands)})")
+        # Card composition (counts only - oracle text is in the reference section)
+        lines.append("**Card Counts:**")
+        lines.append(f"- Creatures: {len(deck.creatures)}")
+        lines.append(f"- Artifacts: {len(deck.artifacts)}")
+        lines.append(f"- Enchantments: {len(deck.enchantments)}")
+        lines.append(f"- Instants: {len(deck.instants)}")
+        lines.append(f"- Sorceries: {len(deck.sorceries)}")
+        lines.append(f"- Planeswalkers: {len(deck.planeswalkers)}")
+        lines.append(f"- Lands: {len(deck.lands)}")
         lines.append("")
         
         # Mana curve
-        lines.append("**Mana Curve:**")
+        lines.append("**Mana Curve (non-land cards):**")
         for cmc in sorted(deck.mana_curve.keys()):
             count = deck.mana_curve[cmc]
-            bar = "█" * min(count, 20)
+            bar = "█" * min(count, 15)
             cmc_label = f"{cmc}+" if cmc == 7 else str(cmc)
             lines.append(f"  {cmc_label}: {bar} ({count})")
         
         return "\n".join(lines)
     
-    def _summarize_cards(self, cards: List[Dict[str, Any]], max_display: int = 8) -> str:
+    def _fetch_combo_data(self, deck: DeckAnalysis) -> str:
         """
-        Create a comma-separated summary of card names.
+        Fetch verified combo data from Commander Spellbook.
+        
+        This queries the Commander Spellbook API to find known combos
+        in the deck, giving Claude verified information instead of
+        having it guess at combos.
         """
-        if not cards:
-            return "None"
+        if not SPELLBOOK_AVAILABLE:
+            return "COMBO DATA:\nCommander Spellbook integration not available."
         
-        names = [card.get("name", "Unknown") for card in cards[:max_display]]
-        result = ", ".join(names)
+        print("  🔍 Fetching verified combos from Commander Spellbook...")
         
-        if len(cards) > max_display:
-            result += f" (+{len(cards) - max_display} more)"
+        # Get all card names from the deck
+        all_cards = (
+            deck.creatures + 
+            deck.artifacts + 
+            deck.enchantments + 
+            deck.instants + 
+            deck.sorceries + 
+            deck.planeswalkers +
+            deck.lands
+        )
+        card_names = [card.get("name", "") for card in all_cards if card.get("name")]
         
-        return result
+        # Also include the commander if it's not already in the list
+        if deck.commander and deck.commander not in card_names:
+            card_names.append(deck.commander)
+        
+        # Query Commander Spellbook
+        try:
+            client = SpellbookClient()
+            combos = client.find_combos(
+                card_names=card_names,
+                commanders=[deck.commander] if deck.commander else None
+            )
+            
+            if combos:
+                combo_text = format_combos_for_prompt(combos)
+                combo_count = len(combos.included)
+                near_miss_count = len(combos.almost_included)
+                print(f"  ✅ Found {combo_count} verified combo(s), {near_miss_count} near-miss combo(s)")
+                
+                # Store combos on the object for potential later use
+                self._last_combos = combos
+                
+                return combo_text
+            else:
+                return "COMBO DATA:\nNo combos found in Commander Spellbook database for this deck."
+                
+        except Exception as e:
+            print(f"  ⚠️  Error fetching combos: {e}")
+            return "COMBO DATA:\nUnable to fetch combo data from Commander Spellbook."
     
     def _generate_fallback_analysis(self, deck: DeckAnalysis) -> str:
         """

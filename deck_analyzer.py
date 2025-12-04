@@ -14,8 +14,11 @@ It checks for:
 - Overall strategy/archetype
 """
 
+import time
 from typing import Dict, List, Any, Set, Tuple
 from dataclasses import dataclass
+import sys
+import requests
 from config import (
     GAME_CHANGERS, MASS_LAND_DENIAL, EXTRA_TURN_CARDS,
     ARCHETYPE_KEYWORDS, BRACKET_DEFINITIONS
@@ -305,6 +308,69 @@ class DeckAnalyzer:
         
         return found
     
+    def fetch_non_ramp_tutors(self):
+    
+        query = 'otag:tutor -otag:ramp -otag:fetchland'
+    
+        url = "https://api.scryfall.com/cards/search"
+        params = {
+        'q': query,
+        'unique': 'cards',
+        'order': 'name'
+    }
+
+        tutor_dictionary = {}
+    
+        while url:
+            try:
+                response = requests.get(url, params=params)
+            
+                if response.status_code == 429:
+                    time.sleep(5)
+                    continue
+                
+                if response.status_code != 200:
+                    print(f"Error: {response.status_code} - {response.text}")
+                    break
+
+                data = response.json()
+                
+                # Process the batch
+                for card in data.get('data', []):
+                    name = card.get('name')
+                    
+                    # Handle Mana Cost (Check faces if MDFC)
+                    if 'mana_cost' in card:
+                        mana_cost = card['mana_cost']
+                    elif 'card_faces' in card:
+                        mana_cost = card['card_faces'][0].get('mana_cost', "")
+                    else:
+                        mana_cost = "N/A"
+
+                    tutor_dictionary[name] = {
+                        "mana_cost": mana_cost,
+                        "type": card.get("type_line"),
+                        "oracle_text": card.get("oracle_text", "See Card Faces"),
+                        "scryfall_uri": card.get("scryfall_uri")
+                    }
+
+                # Pagination: Scryfall gives us the URL for the next 175 cards
+                if data.get('has_more'):
+                    url = data.get('next_page')
+                    params = {} # The next_page URL already has params in it
+                    
+                    # Be polite to the API (Scryfall asks for 50-100ms delay)
+                    time.sleep(0.1)
+                    print(f"Fetched {len(tutor_dictionary)} cards so far...")
+                else:
+                    url = None
+
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                break
+
+        return tutor_dictionary
+
     def _find_tutors(self, cards: List[Dict[str, Any]]) -> List[str]:
         """
         Find cards that function as tutors (search your library).
@@ -314,64 +380,12 @@ class DeckAnalyzer:
         """
         tutors = []
         
-        # Words that indicate it's just a land ramp spell, not a real tutor
-        
-        ramp_phrases_to_ignore = [
-        # Targets (Singular & Plural)
-        "basic land cards",
-        "basic land card",
-        "card with a basic land type",
-        "forest card", "island card", "swamp card", "mountain card", "plains card",
-        "forest cards", "island cards", "swamp cards", "mountain cards", "plains cards",
-        
-        # Procedural Noise (The key fix for Cultivate/Ash Barrens)
-        "reveal those cards",
-        "reveal that card",
-        "discard this card",
-        "discard a card",
-        "exile a card",
-        "shuffle your library", # Sometimes "library" triggers false positives in other logic
-        "put that card onto the battlefield",
-        "card from your hand",
-        "card from your library",
-        
-        # --- State Changes / Self-Reference (Fixes Glacier Godmaw) ---
-        "this creature",
-        "creature token",
-        "sacrifice this creature",  # <--- Fixes Sakura-Tribe Elder (removes "creature" from cost)
-        "creatures you control",    # <--- Fixes Glacier Godmaw (removes "creatures" from landfall)         # Removes "becomes a... artifact creature"
-        "it's an artifact",    # Removes "It's an artifact in addition..."
-        "is an artifact",
-        "it's a creature",
-        "is a creature",
-        "living artifact"      # Specific to Godmaw's flavor text
-    ]
-        # Sort by length descending to avoid partial replacements
-        ramp_phrases_to_ignore.sort(key=len, reverse=True)
+        tutorlist = self.fetch_non_ramp_tutors()
         
         for card in cards:
-            oracle_text = card.get("oracle_text", "").lower()
-            
-            # Check if it searches the library
-            if "search your library" in oracle_text:
-                # Check if it's NOT just a basic land tutor
-                cleanoracle = oracle_text
-                for phrase in ramp_phrases_to_ignore:
-                    cleanoracle = cleanoracle.replace(phrase, "")
-                
-                # Also check if it can find other things
-                can_find_nonland = (
-                    "creature" in cleanoracle or
-                    "artifact" in cleanoracle or
-                    "enchantment" in cleanoracle or
-                    "instant" in cleanoracle or
-                    "sorcery" in cleanoracle or
-                    "planeswalker" in cleanoracle or
-                    "card" in cleanoracle  # Generic "card" often means any card
-                )
-                
-                if can_find_nonland:
-                    tutors.append(card.get("name"))
+            name = card.get("name", "")
+            if name in tutorlist:
+                tutors.append(name)
         
         return tutors
     
