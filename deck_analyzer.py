@@ -336,7 +336,8 @@ class DeckAnalyzer:
         "card from your library",
         
         # --- State Changes / Self-Reference (Fixes Glacier Godmaw) ---
-        "When this creature",
+        "this creature",
+        "creature token",
         "sacrifice this creature",  # <--- Fixes Sakura-Tribe Elder (removes "creature" from cost)
         "creatures you control",    # <--- Fixes Glacier Godmaw (removes "creatures" from landfall)         # Removes "becomes a... artifact creature"
         "it's an artifact",    # Removes "It's an artifact in addition..."
@@ -345,10 +346,7 @@ class DeckAnalyzer:
         "is a creature",
         "living artifact"      # Specific to Godmaw's flavor text
     ]
-
-    # 2. CRITICAL STEP: SORT BY LENGTH
-    # We must remove "basic land cards" (len 16) BEFORE "basic land card" (len 15).
-    # If we don't, "basic land cards" becomes "s" (because the first part was removed), leaving debris.
+        # Sort by length descending to avoid partial replacements
         ramp_phrases_to_ignore.sort(key=len, reverse=True)
         
         for card in cards:
