@@ -33,6 +33,7 @@ from typing import Optional
 # Import our modules
 from deck_analyzer import DeckAnalyzer, DeckAnalysis
 from ai_analyzer import AIPlayAnalyzer
+from dotenv import load_dotenv
 from config import BRACKET_DEFINITIONS
 
 
@@ -204,6 +205,7 @@ def ask_for_ai_analysis() -> bool:
     """
     Ask if the user wants AI play pattern analysis.
     """
+    load_dotenv()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     
     if not api_key:

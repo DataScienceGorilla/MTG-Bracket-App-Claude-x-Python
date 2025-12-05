@@ -35,7 +35,7 @@ from deck_analyzer import DeckAnalysis
 
 # Import our Commander Spellbook client for verified combo data
 try:
-    from combos import SpellbookClient, DeckCombos, format_combos_for_prompt
+    from spellbook_client import SpellbookClient, DeckCombos, format_combos_for_prompt
     SPELLBOOK_AVAILABLE = True
 except ImportError:
     SPELLBOOK_AVAILABLE = False
@@ -134,10 +134,39 @@ class AIPlayAnalyzer:
         # NEW: Fetch verified combos from Commander Spellbook
         combo_section = self._fetch_combo_data(deck)
         
+        # Build bracket rules reference
+        bracket_rules = ""
+        for b_num, details in BRACKET_DEFINITIONS.items():
+            # Treat 'details' as a dictionary and extract fields safely
+            name = details.get("name", f"Bracket {b_num}")
+            desc = details.get("description", "No description")
+            
+            # Add specific constraints if they exist in your config
+            constraints = []
+            if "game_changers_allowed" in details:
+                constraints.append(f"Game Changers: {details['game_changers_allowed']}")
+            if "infinite_combos" in details:
+                constraints.append(f"Combos: {details['infinite_combos']}")
+            if "tutors" in details:
+                constraints.append(f"Tutors: {details['tutors']}")
+            if "theme_focus" in details:
+                constraints.append(f"Theme Focus: {details['theme_focus']}")
+                
+            constraints_text = "\n   ".join(constraints)
+            
+            bracket_rules += f"BRACKET {b_num} ({name}):\n   {desc}\n   {constraints_text}\n\n"
+        
         # Create the prompt with explicit instructions to use provided text
         prompt = f"""You are an expert Magic: The Gathering Commander analyst helping a player understand their deck for the WotC bracket system.
 
 CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. You MUST use ONLY this provided text to understand what each card does. Do NOT rely on your memory of cards, as it may be outdated or incorrect. If a card's text isn't provided, you may use general knowledge, but prefer the provided text.
+
+
+---
+OFFICIAL BRACKET DEFINITIONS (Use these as your SOURCE OF TRUTH):
+---
+{bracket_rules}
+---
 
 ---
 CARD REFERENCE (Use these exact oracle texts):
@@ -189,11 +218,18 @@ Based on the oracle text and verified combo data provided above, please analyze 
    - What are its vulnerabilities? (e.g., graveyard hate, board wipes, etc.)
 
 6. **Bracket Assessment**
-   - Based on how this deck *actually plays*, does Bracket {deck.suggested_bracket} seem right?
+   - Based on how this deck *actually plays*, which bracket would you assign it to? 
+   - **Rule** if the deck could be realistically be played in 2 different brackets, declare the bracket that is furthest from 3.
+   - Look closely at the card list for *non-mechanical* themes. 
+         - Does this look like an "Art Theme" deck (e.g., "Ladies Looking Left", "Old People")?
+         - Is it a "Vorthos/Lore" deck (e.g., "All cards from Mirage block", "The story of Urza")?
+         - Is it a "Meme" deck (e.g., "All Old Border cards", "Cards with hats")?
+         - **Rule:** If the deck sacrifices mechanical viability for an aesthetic or joke theme, it is **Bracket 1**.
+   - Justify your assessment with specific references to deck content and play patterns
    - Factor in the combo power level from the verified combos
-   - Any nuance? (e.g., "Technically bracket 3 due to Game Changers, but plays like bracket 2")
+   - Any nuance? (e.g., "Technically bracket 3 due to Game Changers, but plays like bracket 2" or "This deck is super janky and unfocused, likely bracket 1")
 
-Keep the tone friendly and helpful - like explaining to someone at a game store. Reference specific cards by name when discussing synergies."""
+Keep the tone friendly and helpful - like explaining to someone at a game store. You should make fun of the user if you spot something silly in their deckbuilding choices. Reference specific cards by name when discussing synergies."""
 
         try:
             # Call Claude API

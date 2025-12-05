@@ -116,24 +116,28 @@ class ScryfallClient:
         This is more efficient than calling get_card_by_name repeatedly
         because it can use Scryfall's collection endpoint for batches.
         
+        Handles MDFCs (Modal Double-Faced Cards) by:
+        1. Trying the full name first (e.g., "Malakir Rebirth // Malakir Mire")
+        2. Retrying with just the front face if full name fails
+        3. Storing results under BOTH the search name AND the oracle name
+        
         Args:
             names: List of card names to fetch
         
         Returns:
             A dictionary mapping card names to their data (or None if not found)
         """
-        # We'll use the collection endpoint for efficiency
-        # It accepts up to 75 cards per request
         results = {}
+        not_found_names = []  # Track cards that weren't found for retry
         
-        # Scryfall's collection endpoint takes identifiers
-        # We'll use the "name" identifier type
+        # Map from search name to original name (for later lookup)
+        # This helps us store the result under the name the user provided
+        search_to_original = {name.lower(): name for name in names}
+        
         batch_size = 75
         
         for i in range(0, len(names), batch_size):
             batch = names[i:i + batch_size]
-            
-            # Build the request body for the collection endpoint
             identifiers = [{"name": name} for name in batch]
             
             self._rate_limit()
@@ -149,20 +153,81 @@ class ScryfallClient:
                     
                     # Process found cards
                     for card in data.get("data", []):
-                        # Use the oracle name as the key (handles split cards, etc.)
-                        card_name = card.get("name", "")
-                        results[card_name.lower()] = card
+                        oracle_name = card.get("name", "")
+                        
+                        # Store under the oracle name (what Scryfall returns)
+                        results[oracle_name.lower()] = card
+                        
+                        # For MDFCs, ALSO store under the front face name
+                        # This handles cases where decklist has just "Malakir Rebirth"
+                        # but Scryfall returns "Malakir Rebirth // Malakir Mire"
+                        if " // " in oracle_name:
+                            front_face = oracle_name.split(" // ")[0]
+                            results[front_face.lower()] = card
                     
-                    # Log any cards that weren't found
+                    # Track cards that weren't found (might be MDFCs needing retry)
                     for not_found in data.get("not_found", []):
                         name = not_found.get("name", "Unknown")
-                        print(f"  ⚠️  Card not found in batch: '{name}'")
-                        results[name.lower()] = None
+                        not_found_names.append(name)
                 else:
                     print(f"  ❌ Batch request failed: HTTP {response.status_code}")
                     
             except requests.RequestException as e:
                 print(f"  ❌ Network error in batch request: {e}")
+        
+        # Retry not-found cards using front face name (for MDFCs)
+        # This handles "Malakir Rebirth // Malakir Mire" -> try "Malakir Rebirth"
+        if not_found_names:
+            mdfc_retries = []
+            for name in not_found_names:
+                if " // " in name:
+                    # It's an MDFC written as "Front // Back" - try just front
+                    front_face = name.split(" // ")[0]
+                    mdfc_retries.append((name, front_face))
+                else:
+                    # Not an MDFC format, genuinely not found
+                    print(f"  ⚠️  Card not found: '{name}'")
+                    results[name.lower()] = None
+            
+            # Retry MDFCs with front face names
+            if mdfc_retries:
+                front_face_names = [front for _, front in mdfc_retries]
+                
+                for i in range(0, len(front_face_names), batch_size):
+                    batch = front_face_names[i:i + batch_size]
+                    identifiers = [{"name": name} for name in batch]
+                    
+                    self._rate_limit()
+                    
+                    try:
+                        response = self._session.post(
+                            f"{SCRYFALL_API_BASE}/cards/collection",
+                            json={"identifiers": identifiers}
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            
+                            for card in data.get("data", []):
+                                oracle_name = card.get("name", "")
+                                # Store under oracle name
+                                results[oracle_name.lower()] = card
+                                # Also store under front face for lookups
+                                if " // " in oracle_name:
+                                    front_face = oracle_name.split(" // ")[0]
+                                    results[front_face.lower()] = card
+                            
+                            # Any still not found are truly missing
+                            for not_found in data.get("not_found", []):
+                                name = not_found.get("name", "Unknown")
+                                # Find the original full name
+                                for orig_name, front in mdfc_retries:
+                                    if front == name:
+                                        print(f"  ⚠️  Card not found: '{orig_name}'")
+                                        results[orig_name.lower()] = None
+                                        break
+                    except requests.RequestException as e:
+                        print(f"  ❌ Network error in MDFC retry: {e}")
         
         return results
     

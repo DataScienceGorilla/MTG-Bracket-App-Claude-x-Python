@@ -14,16 +14,29 @@ It checks for:
 - Overall strategy/archetype
 """
 
-import time
-from typing import Dict, List, Any, Set, Tuple
-from dataclasses import dataclass
-import sys
 import requests
+import time
+import synergy
+from typing import Dict, List, Any, Set, Tuple, Optional
+from dataclasses import dataclass, field
 from config import (
     GAME_CHANGERS, MASS_LAND_DENIAL, EXTRA_TURN_CARDS,
-    ARCHETYPE_KEYWORDS, BRACKET_DEFINITIONS
+    ARCHETYPE_KEYWORDS, BRACKET_DEFINITIONS,
+    # New imports for enhanced bracket calculation
+    CEDH_COMMANDERS_TIER1, CEDH_COMMANDERS_TIER2,
+    FAST_MANA, FREE_INTERACTION, COMPETITIVE_STAX,
+    CEDH_COMBO_PIECES, HIGH_POWER_STAPLES,
+    TUTORS_PREMIUM, TUTORS_EFFICIENT, TUTORS_STANDARD, TUTORS_SLOW,
+    BRACKET_SCORING
 )
 from scryfall_client import ScryfallClient, parse_decklist
+
+# Optional import for combo detection
+try:
+    from spellbook_client import SpellbookClient, DeckCombos
+    SPELLBOOK_AVAILABLE = True
+except ImportError:
+    SPELLBOOK_AVAILABLE = False
 
 
 @dataclass
@@ -70,6 +83,36 @@ class DeckAnalysis:
     
     # All card data (for LLM analysis)
     all_cards: List[Dict[str, Any]]
+    
+    # === NEW FIELDS FOR ENHANCED ANALYSIS ===
+    
+    # Tiered tutor breakdown
+    tutors_premium: List[str] = field(default_factory=list)
+    tutors_efficient: List[str] = field(default_factory=list)
+    tutors_standard: List[str] = field(default_factory=list)
+    tutors_slow: List[str] = field(default_factory=list)
+    tutor_score: float = 0.0  # Weighted tutor score
+    
+    # Power level indicators
+    fast_mana_cards: List[str] = field(default_factory=list)
+    free_interaction_cards: List[str] = field(default_factory=list)
+    high_power_staples: List[str] = field(default_factory=list)
+    competitive_stax_cards: List[str] = field(default_factory=list)
+    
+    # cEDH signals
+    cedh_signals: int = 0
+    cedh_signal_breakdown: Dict[str, int] = field(default_factory=dict)
+    is_cedh_commander: bool = False
+    cedh_commander_tier: int = 0  # 0 = not cEDH, 1 = tier 1, 2 = tier 2
+    
+    # Combo data (from Commander Spellbook)
+    verified_combos: List[Dict[str, Any]] = field(default_factory=list)
+    combo_count: int = 0
+    has_cedh_combos: bool = False
+    near_miss_combos: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Synergy Score
+    synergy_score: float = 0.0
 
 
 class DeckAnalyzer:
@@ -90,10 +133,211 @@ class DeckAnalyzer:
                            a new one will be created.
         """
         self.scryfall = scryfall_client or ScryfallClient()
-        
         # Cache the official Game Changers list from Scryfall
         # This ensures we're using the most up-to-date list
         self._game_changers_cache = None
+        
+        # Cache for tutor list from Scryfall (fetched once per session)
+        # This avoids hitting the API repeatedly for large analyses
+        self._tutor_cache = None
+        
+        # Initialize Synergy Analyzer (FIXED: Added this initialization)
+        self.synergy_analyzer = synergy.SynergyAnalyzer()
+    
+    def fetch_non_ramp_tutors(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch all tutor cards from Scryfall using oracle tags.
+        
+        Uses Scryfall's curated tags to find tutors while excluding:
+        - Ramp spells (land tutors like Rampant Growth)
+        - Fetchlands (Polluted Delta, etc.)
+        
+        Falls back to hardcoded tutor lists from config.py if Scryfall
+        is unavailable.
+        
+        Returns:
+            Dictionary mapping card names to their data.
+        
+        Note: Results are cached after first fetch to avoid repeated API calls.
+        """
+        # Return cached results if available
+        if self._tutor_cache is not None:
+            return self._tutor_cache
+        
+        print("  📚 Fetching tutor database from Scryfall...")
+        
+        # Query for tutors that aren't ramp or fetchlands
+        # otag = oracle tag, curated by Scryfall
+        query = '(otag:tutor -otag:ramp -otag:fetchland)'
+        
+        url = "https://api.scryfall.com/cards/search"
+        params = {
+            'q': query,
+            'unique': 'cards',
+            'order': 'name'
+        }
+        
+        tutor_dictionary = {}
+        api_success = False
+        
+        while url:
+            try:
+                response = requests.get(url, params=params, timeout=10)
+                
+                # Handle rate limiting
+                if response.status_code == 429:
+                    print("  ⏳ Rate limited, waiting...")
+                    time.sleep(5)
+                    continue
+                
+                if response.status_code != 200:
+                    print(f"  ⚠️  Scryfall error: {response.status_code}")
+                    break
+                
+                api_success = True
+                data = response.json()
+                
+                # Process the batch of cards
+                for card in data.get('data', []):
+                    name = card.get('name')
+                    
+                    # ---------------------------------------------------
+                    # ⛔ MANUAL BLOCK LIST
+                    # Explicitly skip cards you definitely don't want, 
+                    # even if Scryfall tags them as tutors.
+                    # ---------------------------------------------------
+                    cards_to_ignore = [
+                        "Land Tax", "Ash Barrens"
+                    ]
+                    
+                    if name in cards_to_ignore:
+                        continue
+                    # ---------------------------------------------------
+                    
+                    # Handle Mana Cost (check faces for MDFCs)
+                    if 'mana_cost' in card:
+                        mana_cost = card['mana_cost']
+                    elif 'card_faces' in card:
+                        mana_cost = card['card_faces'][0].get('mana_cost', "")
+                    else:
+                        mana_cost = ""
+                    
+                    tutor_dictionary[name] = {
+                        "mana_cost": mana_cost,
+                        "cmc": card.get("cmc", 0),
+                        "type": card.get("type_line", ""),
+                        "oracle_text": card.get("oracle_text", "See Card Faces"),
+                        "scryfall_uri": card.get("scryfall_uri", "")
+                    }
+                
+                # Pagination: Scryfall returns up to 175 cards per page
+                if data.get('has_more'):
+                    url = data.get('next_page')
+                    params = {}  # next_page URL already has params
+                    
+                    # Be polite to the API (Scryfall asks for 50-100ms delay)
+                    time.sleep(0.1)
+                else:
+                    url = None
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"  ⚠️  Network error fetching tutors: {e}")
+                break
+            except Exception as e:
+                print(f"  ⚠️  Error fetching tutors: {e}")
+                break
+        
+        # If API failed or returned no results, fall back to hardcoded lists
+        if not api_success or len(tutor_dictionary) == 0:
+            print("  ⚠️  Using fallback tutor list from config...")
+            tutor_dictionary = self._build_fallback_tutor_dict()
+        else:
+            print(f"  ✅ Loaded {len(tutor_dictionary)} tutors from Scryfall")
+        
+        # ---------------------------------------------------------
+        # MANUAL OVERRIDES
+        # Add cards that were not captured by the Scryfall query.
+        # ---------------------------------------------------------
+        """ tutor_dictionary["Weathered Wayfarer"] = {
+             "mana_cost": "{W}",
+             "cmc": 1.0,
+             "type": "Creature — Human Cleric",
+             "oracle_text": "{W}, {T}: Search your library for a land card, reveal it, put it into your hand, then shuffle. Activate only if an opponent controls more lands than you.",
+             "scryfall_uri": "https://scryfall.com/card/2x2/34/weathered-wayfarer"
+        } """
+        # ---------------------------------------------------------
+        
+        # Cache the results
+        self._tutor_cache = tutor_dictionary
+        return tutor_dictionary
+    
+    def _build_fallback_tutor_dict(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Build a tutor dictionary from our hardcoded config lists.
+        
+        Used as fallback when Scryfall API is unavailable.
+        """
+        tutor_dict = {}
+        
+        # Estimated CMCs for our categorized tutors
+        # (We don't have exact data without Scryfall, so we estimate by tier)
+        tier_cmcs = {
+            "premium": 1.5,    # Premium tutors average ~1-2 CMC
+            "efficient": 2.5,  # Efficient tutors average ~2-3 CMC
+            "standard": 3.5,   # Standard tutors average ~3-4 CMC
+            "slow": 5.0        # Slow tutors average ~5+ CMC
+        }
+        
+        for name in TUTORS_PREMIUM:
+            tutor_dict[name] = {"cmc": tier_cmcs["premium"], "type": "Unknown", "mana_cost": "", "oracle_text": ""}
+        
+        for name in TUTORS_EFFICIENT:
+            tutor_dict[name] = {"cmc": tier_cmcs["efficient"], "type": "Unknown", "mana_cost": "", "oracle_text": ""}
+        
+        for name in TUTORS_STANDARD:
+            tutor_dict[name] = {"cmc": tier_cmcs["standard"], "type": "Unknown", "mana_cost": "", "oracle_text": ""}
+        
+        for name in TUTORS_SLOW:
+            tutor_dict[name] = {"cmc": tier_cmcs["slow"], "type": "Unknown", "mana_cost": "", "oracle_text": ""}
+        
+        print(f"  ✅ Loaded {len(tutor_dict)} tutors from fallback list")
+        return tutor_dict
+    
+    def _find_tutors(self, cards: List[Dict[str, Any]]) -> List[str]:
+        """
+        Find cards that function as tutors using Scryfall's oracle tags.
+        
+        This is more accurate than text parsing because Scryfall curates
+        which cards are actually tutors vs. just having "search your library"
+        text (e.g., fetchlands, ramp spells).
+        
+        Args:
+            cards: List of card data dictionaries
+            
+        Returns:
+            List of tutor card names found in the deck
+        """
+        tutors = []
+        
+        # Get the tutor list from Scryfall (cached after first call)
+        tutor_list = self.fetch_non_ramp_tutors()
+        
+        for card in cards:
+            name = card.get("name", "")
+            
+            # Check if this card is in our tutor database
+            if name in tutor_list:
+                tutors.append(name)
+            
+            # Also check for DFCs (double-faced cards) - check front face name
+            # Some tutors like "Bala Ged Recovery // Bala Ged Sanctuary" might
+            # be in the list under just the front face name
+            if " // " in name:
+                front_face = name.split(" // ")[0]
+                if front_face in tutor_list and name not in tutors:
+                    tutors.append(name)
+        
+        return tutors
     
     @property
     def game_changers_set(self) -> Set[str]:
@@ -156,7 +400,6 @@ class DeckAnalyzer:
         # Step 4: Detect commander (if not provided)
         commander = commander_name
         if not commander and all_cards:
-            # Look for legendary creatures that are commonly commanders
             commander = self._detect_commander(all_cards)
         
         # Step 5: Categorize cards by type
@@ -165,30 +408,72 @@ class DeckAnalyzer:
         # Step 6: Find Game Changers
         game_changers = self._find_game_changers(all_cards)
         
-        # Step 7: Find problematic cards
+        # Step 7: Find problematic cards (original)
         mass_ld = self._find_cards_by_name(all_cards, MASS_LAND_DENIAL)
         extra_turns = self._find_cards_by_name(all_cards, EXTRA_TURN_CARDS)
-        tutors = self._find_tutors(all_cards)
         
-        # Step 8: Detect archetypes
+        # Step 8: ENHANCED - Classify tutors by tier
+        print("  🔍 Analyzing tutor density...")
+        tutor_breakdown = self._classify_tutors(all_cards)
+        tutor_score = self._calculate_tutor_score(tutor_breakdown)
+        all_tutors = (tutor_breakdown["premium"] + tutor_breakdown["efficient"] + 
+                      tutor_breakdown["standard"] + tutor_breakdown["slow"])
+        
+        # Step 9: ENHANCED - Find power level indicators
+        print("  ⚡ Detecting power level indicators...")
+        power_cards = self._find_power_level_cards(all_cards)
+        
+        # Step 10: ENHANCED - Check cEDH commander status
+        cedh_commander_tier = self._check_cedh_commander(commander)
+        
+        # Step 10.5: ENHANCED - Check Jank status via synergy score
+        print("  🤝 Calculating Synergy Score...")
+        synergy_score = self.synergy_analyzer.calculate_synergy_score(all_cards)
+        print(f"  ℹ️  Synergy Score: {synergy_score:.1f} (Threshold: {BRACKET_SCORING['jank_synergy_threshold']})")
+        
+        # Step 11: Detect archetypes
         archetypes = self._detect_archetypes(all_cards)
         
-        # Step 9: Calculate mana curve
+        # Step 12: Calculate mana curve
         mana_curve, avg_cmc = self._calculate_mana_curve(all_cards)
         
-        # Step 10: Determine color identity
+        # Step 13: Determine color identity
         color_identity = self._get_color_identity(all_cards)
         
-        # Step 11: Calculate suggested bracket
-        bracket, reasoning = self._calculate_bracket(
+        # Step 14: ENHANCED - Fetch combos from Commander Spellbook
+        combo_data = self._fetch_combos(all_cards, commander)
+        
+        # Step 15: ENHANCED - Calculate cEDH signals
+        print("  🎯 Calculating cEDH signals...")
+        cedh_signals, cedh_breakdown = self._calculate_cedh_signals(
+            commander=commander,
+            cedh_commander_tier=cedh_commander_tier,
+            fast_mana_count=len(power_cards["fast_mana"]),
+            free_interaction_count=len(power_cards["free_interaction"]),
+            stax_count=len(power_cards["competitive_stax"]),
+            avg_cmc=avg_cmc,
+            land_count=len(categorized["lands"]),
+            combo_data=combo_data,
+            tutor_score=tutor_score
+        )
+        
+        # Step 16: ENHANCED - Calculate bracket with all new data
+        bracket, reasoning = self._calculate_bracket_enhanced(
             game_changers_count=len(game_changers),
             has_mass_ld=len(mass_ld) > 0,
             extra_turn_count=len(extra_turns),
-            tutor_count=len(tutors),
+            tutor_score=tutor_score,
+            fast_mana_count=len(power_cards["fast_mana"]),
+            staple_count=len(power_cards["high_power_staples"]),
+            cedh_signals=cedh_signals,
+            synergy_score=synergy_score,
+            combo_data=combo_data,
             archetypes=archetypes
         )
         
         print(f"  🎯 Analysis complete! Suggested bracket: {bracket}")
+        if cedh_signals >= BRACKET_SCORING["cedh_signal_threshold"]:
+            print(f"  ⚠️  cEDH signals detected: {cedh_signals} points")
         
         return DeckAnalysis(
             commander=commander or "Unknown",
@@ -197,7 +482,7 @@ class DeckAnalyzer:
             game_changers_count=len(game_changers),
             mass_land_denial_cards=mass_ld,
             extra_turn_cards=extra_turns,
-            tutor_cards=tutors,
+            tutor_cards=all_tutors,
             creatures=categorized["creatures"],
             artifacts=categorized["artifacts"],
             enchantments=categorized["enchantments"],
@@ -211,7 +496,26 @@ class DeckAnalyzer:
             average_cmc=avg_cmc,
             suggested_bracket=bracket,
             bracket_reasoning=reasoning,
-            all_cards=all_cards
+            all_cards=all_cards,
+            # New fields
+            tutors_premium=tutor_breakdown["premium"],
+            tutors_efficient=tutor_breakdown["efficient"],
+            tutors_standard=tutor_breakdown["standard"],
+            tutors_slow=tutor_breakdown["slow"],
+            tutor_score=tutor_score,
+            fast_mana_cards=power_cards["fast_mana"],
+            free_interaction_cards=power_cards["free_interaction"],
+            high_power_staples=power_cards["high_power_staples"],
+            competitive_stax_cards=power_cards["competitive_stax"],
+            cedh_signals=cedh_signals,
+            cedh_signal_breakdown=cedh_breakdown,
+            is_cedh_commander=cedh_commander_tier > 0,
+            cedh_commander_tier=cedh_commander_tier,
+            verified_combos=combo_data.get("included", []),
+            combo_count=combo_data.get("combo_count", 0),
+            has_cedh_combos=combo_data.get("has_cedh_combos", False),
+            near_miss_combos=combo_data.get("almost_included", []),
+            synergy_score=synergy_score
         )
     
     def _detect_commander(self, cards: List[Dict[str, Any]]) -> str:
@@ -308,87 +612,6 @@ class DeckAnalyzer:
         
         return found
     
-    def fetch_non_ramp_tutors(self):
-    
-        query = 'otag:tutor -otag:ramp -otag:fetchland'
-    
-        url = "https://api.scryfall.com/cards/search"
-        params = {
-        'q': query,
-        'unique': 'cards',
-        'order': 'name'
-    }
-
-        tutor_dictionary = {}
-    
-        while url:
-            try:
-                response = requests.get(url, params=params)
-            
-                if response.status_code == 429:
-                    time.sleep(5)
-                    continue
-                
-                if response.status_code != 200:
-                    print(f"Error: {response.status_code} - {response.text}")
-                    break
-
-                data = response.json()
-                
-                # Process the batch
-                for card in data.get('data', []):
-                    name = card.get('name')
-                    
-                    # Handle Mana Cost (Check faces if MDFC)
-                    if 'mana_cost' in card:
-                        mana_cost = card['mana_cost']
-                    elif 'card_faces' in card:
-                        mana_cost = card['card_faces'][0].get('mana_cost', "")
-                    else:
-                        mana_cost = "N/A"
-
-                    tutor_dictionary[name] = {
-                        "mana_cost": mana_cost,
-                        "type": card.get("type_line"),
-                        "oracle_text": card.get("oracle_text", "See Card Faces"),
-                        "scryfall_uri": card.get("scryfall_uri")
-                    }
-
-                # Pagination: Scryfall gives us the URL for the next 175 cards
-                if data.get('has_more'):
-                    url = data.get('next_page')
-                    params = {} # The next_page URL already has params in it
-                    
-                    # Be polite to the API (Scryfall asks for 50-100ms delay)
-                    time.sleep(0.1)
-                    print(f"Fetched {len(tutor_dictionary)} cards so far...")
-                else:
-                    url = None
-
-            except Exception as e:
-                print(f"An error occurred: {e}")
-                break
-
-        return tutor_dictionary
-
-    def _find_tutors(self, cards: List[Dict[str, Any]]) -> List[str]:
-        """
-        Find cards that function as tutors (search your library).
-        
-        We look for cards with "search your library" in their text,
-        excluding basic land tutors like Rampant Growth.
-        """
-        tutors = []
-        
-        tutorlist = self.fetch_non_ramp_tutors()
-        
-        for card in cards:
-            name = card.get("name", "")
-            if name in tutorlist:
-                tutors.append(name)
-        
-        return tutors
-    
     def _detect_archetypes(self, cards: List[Dict[str, Any]]) -> List[str]:
         """
         Detect what archetypes/strategies the deck is built around.
@@ -413,7 +636,7 @@ class DeckAnalyzer:
                         break  # Don't double-count same card
         
         # Return archetypes with significant presence (at least 5 cards)
-        threshold = 5
+        threshold = 15  # Minimum number of matching cards to consider
         detected = [
             archetype for archetype, score in archetype_scores.items()
             if score >= threshold
@@ -475,6 +698,466 @@ class DeckAnalyzer:
         order = ["W", "U", "B", "R", "G"]
         return [c for c in order if c in all_colors]
     
+    # =========================================================================
+    # NEW ENHANCED ANALYSIS METHODS
+    # =========================================================================
+    
+    def _classify_tutors(self, cards: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """
+        Classify tutors into tiers based on efficiency.
+        
+        Uses Scryfall's oracle tags to identify tutors, then classifies them:
+        - Premium: 1-2 mana, flexible (Demonic Tutor, Vampiric Tutor)
+        - Efficient: Cheap or powerful but more limited (Green Sun's Zenith)
+        - Standard: 3-4 mana, functional (Diabolic Intent)
+        - Slow: 5+ mana or very restricted (Diabolic Revelation)
+        
+        For tutors not in our predefined lists, we auto-classify by CMC.
+        """
+        result = {
+            "premium": [],
+            "efficient": [],
+            "standard": [],
+            "slow": []
+        }
+        
+        # Build lookup sets from config (lowercase for matching)
+        premium_set = {name.lower() for name in TUTORS_PREMIUM}
+        efficient_set = {name.lower() for name in TUTORS_EFFICIENT}
+        standard_set = {name.lower() for name in TUTORS_STANDARD}
+        slow_set = {name.lower() for name in TUTORS_SLOW}
+        
+        # Get authoritative tutor list from Scryfall
+        scryfall_tutors = self.fetch_non_ramp_tutors()
+        
+        for card in cards:
+            name = card.get("name", "")
+            name_lower = name.lower()
+            
+            # Check if this card is a tutor (using Scryfall's tags)
+            is_tutor = name in scryfall_tutors
+            
+            # Also check DFC front face
+            if not is_tutor and " // " in name:
+                front_face = name.split(" // ")[0]
+                is_tutor = front_face in scryfall_tutors
+            
+            if not is_tutor:
+                continue
+            
+            # Now classify the tutor by tier
+            # First check our predefined lists
+            if name_lower in premium_set:
+                result["premium"].append(name)
+            elif name_lower in efficient_set:
+                result["efficient"].append(name)
+            elif name_lower in standard_set:
+                result["standard"].append(name)
+            elif name_lower in slow_set:
+                result["slow"].append(name)
+            else:
+                # Tutor not in our lists - auto-classify by CMC
+                # Get CMC from Scryfall data or card data
+                if name in scryfall_tutors:
+                    cmc = scryfall_tutors[name].get("cmc", 4)
+                else:
+                    cmc = card.get("cmc", 4)
+                
+                # Classify by mana cost
+                if cmc <= 1:
+                    result["premium"].append(name)
+                elif cmc <= 2:
+                    result["efficient"].append(name)
+                elif cmc <= 3:
+                    result["standard"].append(name)
+                else:
+                    result["slow"].append(name)
+        
+        return result
+    
+    def _calculate_tutor_score(self, tutor_breakdown: Dict[str, List[str]]) -> float:
+        """
+        Calculate a weighted tutor score.
+        
+        Premium tutors count for more since they enable faster, more consistent wins.
+        """
+        score = 0.0
+        score += len(tutor_breakdown["premium"]) * BRACKET_SCORING["tutor_premium_weight"]
+        score += len(tutor_breakdown["efficient"]) * BRACKET_SCORING["tutor_efficient_weight"]
+        score += len(tutor_breakdown["standard"]) * BRACKET_SCORING["tutor_standard_weight"]
+        score += len(tutor_breakdown["slow"]) * BRACKET_SCORING["tutor_slow_weight"]
+        return score
+    
+    def _find_power_level_cards(self, cards: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        """
+        Find cards that indicate high power level or cEDH.
+        
+        Returns lists of: fast_mana, free_interaction, high_power_staples, competitive_stax
+        """
+        result = {
+            "fast_mana": [],
+            "free_interaction": [],
+            "high_power_staples": [],
+            "competitive_stax": []
+        }
+        
+        # Build lookup sets
+        fast_mana_set = {name.lower() for name in FAST_MANA}
+        free_int_set = {name.lower() for name in FREE_INTERACTION}
+        staples_set = {name.lower() for name in HIGH_POWER_STAPLES}
+        stax_set = {name.lower() for name in COMPETITIVE_STAX}
+        
+        for card in cards:
+            name = card.get("name", "")
+            name_lower = name.lower()
+            
+            if name_lower in fast_mana_set:
+                result["fast_mana"].append(name)
+            if name_lower in free_int_set:
+                result["free_interaction"].append(name)
+            if name_lower in staples_set:
+                result["high_power_staples"].append(name)
+            if name_lower in stax_set:
+                result["competitive_stax"].append(name)
+        
+        return result
+    
+    def _check_cedh_commander(self, commander: str) -> int:
+        """
+        Check if the commander is known as a cEDH commander.
+        
+        Returns:
+            0 = Not a known cEDH commander
+            1 = Tier 1 cEDH commander (almost exclusively competitive)
+            2 = Tier 2 cEDH commander (often competitive, sometimes casual)
+        """
+        if not commander:
+            return 0
+        
+        commander_lower = commander.lower()
+        
+        # Check tier 1
+        for name in CEDH_COMMANDERS_TIER1:
+            if name.lower() in commander_lower or commander_lower in name.lower():
+                return 1
+        
+        # Check tier 2
+        for name in CEDH_COMMANDERS_TIER2:
+            if name.lower() in commander_lower or commander_lower in name.lower():
+                return 2
+        
+        return 0
+    
+    def _fetch_combos(self, cards: List[Dict[str, Any]], commander: str) -> Dict[str, Any]:
+        """
+        Fetch verified combos from Commander Spellbook.
+        
+        Returns dict with:
+            - included: List of combos fully in the deck
+            - almost_included: List of combos missing 1-2 cards
+            - combo_count: Number of verified combos
+            - has_cedh_combos: Whether any combos are cEDH-level
+        """
+        result = {
+            "included": [],
+            "almost_included": [],
+            "combo_count": 0,
+            "has_cedh_combos": False,
+            "cedh_combo_count": 0,
+            "bracket_impact": 0  # Highest bracket any combo pushes to
+        }
+        
+        if not SPELLBOOK_AVAILABLE:
+            print("  ⚠️  Commander Spellbook client not available")
+            return result
+        
+        print("  🔍 Checking Commander Spellbook for combos...", flush=True)
+        
+        try:
+            client = SpellbookClient()
+            card_names = [card.get("name", "") for card in cards]
+            
+            # Filter out empty names
+            card_names = [n for n in card_names if n]
+            
+            combos = client.find_combos(
+                card_names=card_names,
+                commanders=[commander] if commander else None
+            )
+            
+            if combos:
+                result["combo_count"] = len(combos.included)
+                
+                # Process included combos
+                for combo in combos.included:
+                    combo_info = {
+                        "cards": combo.card_names,
+                        "produces": combo.produces,
+                        "bracket_tag": combo.bracket_tag,
+                        "suggested_bracket": combo.suggested_bracket,
+                        "description": combo.description,
+                        "popularity": combo.popularity
+                    }
+                    result["included"].append(combo_info)
+                    
+                    # Check if it's a cEDH-level combo (Ruthless tag)
+                    if combo.bracket_tag == "R":
+                        result["has_cedh_combos"] = True
+                        result["cedh_combo_count"] += 1
+                    
+                    # Track highest bracket impact
+                    result["bracket_impact"] = max(
+                        result["bracket_impact"], 
+                        combo.suggested_bracket
+                    )
+                
+                # Process near-miss combos
+                for combo in combos.almost_included[:10]:  # Limit to 10
+                    combo_info = {
+                        "cards": combo.card_names,
+                        "produces": combo.produces,
+                        "bracket_tag": combo.bracket_tag
+                    }
+                    result["almost_included"].append(combo_info)
+                
+                if result["combo_count"] > 0:
+                    print(f"  ✅ Found {result['combo_count']} verified combo(s)")
+                else:
+                    print(f"  ✅ No combos found in Spellbook database")
+            else:
+                print(f"  ✅ No combos found in Spellbook database")
+                
+        except Exception as e:
+            print(f"  ⚠️  Error fetching combos: {e}")
+        
+        return result
+    
+    def _calculate_cedh_signals(
+        self,
+        commander: str,
+        cedh_commander_tier: int,
+        fast_mana_count: int,
+        free_interaction_count: int,
+        stax_count: int,
+        avg_cmc: float,
+        land_count: int,
+        combo_data: Dict[str, Any],
+        tutor_score: float
+    ) -> Tuple[int, Dict[str, int]]:
+        """
+        Calculate cEDH signals - indicators that a deck is competitive EDH.
+        
+        Returns:
+            Tuple of (total_signals, breakdown_dict)
+        """
+        signals = 0
+        breakdown = {}
+        
+        # Commander signal (+4 for tier 1, +2 for tier 2)
+        if cedh_commander_tier == 1:
+            signals += 4
+            breakdown["cedh_commander_tier1"] = 4
+        elif cedh_commander_tier == 2:
+            signals += 2
+            breakdown["cedh_commander_tier2"] = 2
+        
+        # Fast mana signals (+1 per piece)
+        if fast_mana_count >= BRACKET_SCORING["fast_mana_cedh_threshold"]:
+            bonus = fast_mana_count
+            signals += bonus
+            breakdown["fast_mana"] = bonus
+        elif fast_mana_count >= 3:
+            signals += fast_mana_count - 2
+            breakdown["fast_mana"] = fast_mana_count - 2
+        
+        # Free interaction signals
+        if free_interaction_count >= BRACKET_SCORING["free_interaction_cedh_threshold"]:
+            bonus = free_interaction_count
+            signals += bonus
+            breakdown["free_interaction"] = bonus
+        
+        # Low average CMC signals
+        if avg_cmc < BRACKET_SCORING["avg_cmc_cedh"]:
+            signals += 2
+            breakdown["low_avg_cmc"] = 2
+        elif avg_cmc < BRACKET_SCORING["avg_cmc_optimized"]:
+            signals += 1
+            breakdown["optimized_curve"] = 1
+        
+        # Low land count signal
+        if land_count <= BRACKET_SCORING["lands_cedh_max"]:
+            signals += 1
+            breakdown["low_land_count"] = 1
+        
+        # cEDH combo signals
+        if combo_data.get("has_cedh_combos"):
+            cedh_combos = combo_data.get("cedh_combo_count", 0)
+            bonus = min(cedh_combos * 2, 4)  # Cap at +4
+            signals += bonus
+            breakdown["cedh_combos"] = bonus
+        
+        # High tutor density signal
+        if tutor_score >= 15:
+            signals += 2
+            breakdown["heavy_tutors"] = 2
+        elif tutor_score >= 10:
+            signals += 1
+            breakdown["moderate_tutors"] = 1
+        
+        # Competitive stax density
+        if stax_count >= 5:
+            signals += 2
+            breakdown["stax_density"] = 2
+        elif stax_count >= 3:
+            signals += 1
+            breakdown["stax_density"] = 1
+        
+        return signals, breakdown
+    
+    def _calculate_bracket_enhanced(
+        self,
+        game_changers_count: int,
+        has_mass_ld: bool,
+        extra_turn_count: int,
+        tutor_score: float,
+        fast_mana_count: int,
+        staple_count: int,
+        cedh_signals: int,
+        synergy_score: float,
+        combo_data: Dict[str, Any],
+        archetypes: List[str]
+    ) -> Tuple[int, List[str]]:
+        """
+        Calculate the suggested bracket based on comprehensive deck analysis.
+        
+        This is the enhanced bracket determination logic that uses:
+        - Game Changers (official list)
+        - Weighted tutor scoring
+        - Fast mana density
+        - High-power staple density
+        - Verified combo data from Commander Spellbook
+        - cEDH signals for Bracket 5 detection
+        
+        Returns:
+            Tuple of (bracket_number, list_of_reasons)
+        """
+        reasons = []
+        bracket = 2  # Start at Core (default precon level)
+        
+        # =====================================================================
+        # CHECK FOR BRACKET 5 (cEDH) FIRST
+        # =====================================================================
+        if cedh_signals >= BRACKET_SCORING["cedh_signal_threshold"]:
+            bracket = 5
+            reasons.append(f"⚡ cEDH signals detected ({cedh_signals} points)")
+            reasons.append("  Deck appears optimized for competitive play")
+            # Still add other reasons for context
+        # =====================================================================
+        # CHECK FOR BRACKET 1 (Jank) SECOND
+        # =====================================================================
+        if synergy_score < BRACKET_SCORING["jank_synergy_threshold"]:
+            bracket = 1
+            reasons.append(f"🃏 Low synergy score ({synergy_score:.1f}) indicates jank/theme deck")
+            reasons.append("  Deck likely built for casual/artistic theme")
+            return bracket, reasons  # Jank overrides other considerations
+        
+        # =====================================================================
+        # COMBO ANALYSIS (from Commander Spellbook)
+        # =====================================================================
+        combo_count = combo_data.get("combo_count", 0)
+        combo_bracket_impact = combo_data.get("bracket_impact", 0)
+        
+        if combo_data.get("has_cedh_combos"):
+            bracket = max(bracket, 4)
+            cedh_combo_count = combo_data.get("cedh_combo_count", 0)
+            reasons.append(f"🎯 Has {cedh_combo_count} cEDH-level combo(s) (Ruthless tier)")
+        
+        if combo_bracket_impact >= 4 and combo_count > 0:
+            bracket = max(bracket, 4)
+            reasons.append(f"🎯 Has {combo_count} verified combo(s) (Bracket {combo_bracket_impact} impact)")
+        elif combo_count >= 2:
+            bracket = max(bracket, 3)
+            reasons.append(f"🎯 Has {combo_count} verified combo(s)")
+        elif combo_count == 1:
+            reasons.append(f"🎯 Has 1 verified combo")
+        else:
+            # Always show combo status so user knows it was checked
+            reasons.append(f"🎯 Verified combos: {combo_count} found")
+        
+        # =====================================================================
+        # GAME CHANGERS
+        # =====================================================================
+        if game_changers_count > 3:
+            bracket = max(bracket, 4)
+            reasons.append(f"📜 Has {game_changers_count} Game Changers (>3 requires Bracket 4+)")
+        elif game_changers_count > 0:
+            bracket = max(bracket, 3)
+            reasons.append(f"📜 Has {game_changers_count} Game Changer(s) (requires Bracket 3+)")
+        
+        # =====================================================================
+        # MASS LAND DENIAL
+        # =====================================================================
+        if has_mass_ld:
+            bracket = max(bracket, 4)
+            reasons.append("💥 Contains mass land denial (requires Bracket 4+)")
+        
+        # =====================================================================
+        # EXTRA TURNS
+        # =====================================================================
+        if extra_turn_count >= 3:
+            bracket = max(bracket, 4)
+            reasons.append(f"⏰ Has {extra_turn_count} extra turn cards (high density)")
+        elif extra_turn_count >= 1:
+            bracket = max(bracket, 3)
+            reasons.append(f"⏰ Has {extra_turn_count} extra turn card(s)")
+        
+        # =====================================================================
+        # TUTOR SCORE (Weighted)
+        # =====================================================================
+        if tutor_score >= BRACKET_SCORING["tutor_bracket4_threshold"]:
+            bracket = max(bracket, 4)
+            reasons.append(f"🔍 High tutor density (score: {tutor_score:.1f})")
+        elif tutor_score >= BRACKET_SCORING["tutor_bracket3_threshold"]:
+            bracket = max(bracket, 3)
+            reasons.append(f"🔍 Moderate tutor density (score: {tutor_score:.1f})")
+        
+        # =====================================================================
+        # FAST MANA
+        # =====================================================================
+        if fast_mana_count >= BRACKET_SCORING["fast_mana_bracket4_threshold"]:
+            bracket = max(bracket, 4)
+            reasons.append(f"💎 High fast mana count ({fast_mana_count} pieces)")
+        elif fast_mana_count >= 2:
+            bracket = max(bracket, 3)
+            reasons.append(f"💎 Has {fast_mana_count} fast mana pieces")
+        
+        # =====================================================================
+        # HIGH-POWER STAPLES
+        # =====================================================================
+        if staple_count >= BRACKET_SCORING["staples_bracket4_threshold"]:
+            bracket = max(bracket, 4)
+            reasons.append(f"⭐ High staple density ({staple_count} high-power cards)")
+        elif staple_count >= BRACKET_SCORING["staples_bracket3_threshold"]:
+            bracket = max(bracket, 3)
+            reasons.append(f"⭐ Has {staple_count} high-power staples")
+        
+        # =====================================================================
+        # COMBO ARCHETYPE (from detection)
+        # =====================================================================
+        if "combo" in archetypes and bracket < 3:
+            bracket = max(bracket, 3)
+            reasons.append("🔄 Deck has combo elements")
+        
+        # =====================================================================
+        # DEFAULT EXPLANATION
+        # =====================================================================
+        if bracket == 2:
+            reasons.append("✅ No significant power indicators found")
+            reasons.append("   Deck appears to be at precon power level")
+        
+        return bracket, reasons
+    
+    # Keep the old method for backwards compatibility but mark as deprecated
     def _calculate_bracket(
         self,
         game_changers_count: int,
@@ -484,56 +1167,25 @@ class DeckAnalyzer:
         archetypes: List[str]
     ) -> Tuple[int, List[str]]:
         """
-        Calculate the suggested bracket based on deck characteristics.
+        DEPRECATED: Use _calculate_bracket_enhanced instead.
         
-        This is the core bracket determination logic.
-        
-        Returns:
-            Tuple of (bracket_number, list_of_reasons)
+        This method is kept for backwards compatibility only.
         """
-        reasons = []
-        bracket = 2  # Start at Core (default precon level)
+        # Convert old tutor count to approximate score
+        tutor_score = tutor_count * 1.5  # Rough approximation
         
-        # Check Game Changers
-        if game_changers_count > 3:
-            bracket = max(bracket, 4)
-            reasons.append(f"Has {game_changers_count} Game Changers (>3 requires Bracket 4+)")
-        elif game_changers_count > 0:
-            bracket = max(bracket, 3)
-            reasons.append(f"Has {game_changers_count} Game Changer(s) (requires Bracket 3+)")
-        
-        # Check mass land denial
-        if has_mass_ld:
-            bracket = max(bracket, 4)
-            reasons.append("Contains mass land denial (requires Bracket 4+)")
-        
-        # Check extra turns
-        if extra_turn_count >= 3:
-            bracket = max(bracket, 4)
-            reasons.append(f"Has {extra_turn_count} extra turn cards (high density requires Bracket 4+)")
-        elif extra_turn_count >= 1:
-            bracket = max(bracket, 3)
-            reasons.append(f"Has {extra_turn_count} extra turn card(s)")
-        
-        # Check tutor density
-        if tutor_count >= 8:
-            bracket = max(bracket, 4)
-            reasons.append(f"Has {tutor_count} tutors (heavy tutor presence)")
-        elif tutor_count >= 5:
-            bracket = max(bracket, 3)
-            reasons.append(f"Has {tutor_count} tutors (moderate tutor presence)")
-        
-        # Check for combo indicators
-        if "combo" in archetypes:
-            bracket = max(bracket, 3)
-            reasons.append("Deck has combo elements")
-        
-        # If no issues found, explain why it's bracket 2
-        if not reasons:
-            reasons.append("No Game Changers, combo pieces, or problematic cards found")
-            reasons.append("Deck appears to be at precon power level")
-        
-        return bracket, reasons
+        return self._calculate_bracket_enhanced(
+            game_changers_count=game_changers_count,
+            has_mass_ld=has_mass_ld,
+            extra_turn_count=extra_turn_count,
+            tutor_score=tutor_score,
+            fast_mana_count=0,
+            staple_count=0,
+            cedh_signals=0,
+            synergy_score=50.0,  # Default safe value for legacy calls
+            combo_data={},
+            archetypes=archetypes
+        )
 
 
 # ============================================================================
