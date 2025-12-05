@@ -645,5 +645,5 @@ BRACKET_SCORING = {
     # Land count thresholds
     "lands_cedh_max": 31,      # 31 or fewer lands = cEDH signal
     
-    "jank_synergy_threshold": 140,  # Synergy score below this indicates jank deck
+    "jank_synergy_threshold": 40,  # Synergy score below this indicates jank deck
 }

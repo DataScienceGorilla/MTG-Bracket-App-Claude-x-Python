@@ -218,7 +218,7 @@ Based on the oracle text and verified combo data provided above, please analyze 
    - What are its vulnerabilities? (e.g., graveyard hate, board wipes, etc.)
 
 6. **Bracket Assessment**
-   - Based on how this deck *actually plays*, which bracket would you assign it to? 
+   - Based on how this deck *actually plays*, which bracket would you assign it to? A seperate aglorigthm has judged it to be Bracket {deck.suggested_bracket}, but your analysis may differ. If you disagree, explain why. 
    - **Rule** if the deck could be realistically be played in 2 different brackets, declare the bracket that is furthest from 3.
    - Look closely at the card list for *non-mechanical* themes. 
          - Does this look like an "Art Theme" deck (e.g., "Ladies Looking Left", "Old People")?

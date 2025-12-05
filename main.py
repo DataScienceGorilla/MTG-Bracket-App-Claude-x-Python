@@ -42,10 +42,10 @@ def print_banner():
     print("""
 ╔═══════════════════════════════════════════════════════════════╗
 ║                                                               ║
-║        ⚔️  MTG Commander Bracket Analyzer  ⚔️                  ║
+║        ⚔️  MTG Commander Bracket Analyzer  ⚔️                   ║
 ║                                                               ║
 ║    Analyze your deck for the WotC bracket system              ║
-║    with AI-powered play pattern insights                      ║
+║                                                               ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """)

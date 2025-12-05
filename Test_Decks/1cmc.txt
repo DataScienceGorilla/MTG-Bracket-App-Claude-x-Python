@@ -1,0 +1,95 @@
+1 Abjure
+1 Abundant Growth
+1 An Offer You Can't Refuse
+1 Arboreal Grazer
+1 Ascendant Spirit
+1 Barkchannel Pathway
+1 Betrayal
+1 Birds of Paradise
+1 Birthday Escape
+1 Blast Zone
+1 Boseiju, Who Endures
+1 Botanical Sanctum
+1 Brainstorm
+1 Breeding Pool
+1 Bushwhack
+1 Careful Study
+1 Cerulean Wisps
+1 Charge Through
+1 Cloak of Feathers
+1 Command Tower
+1 Consider
+1 Consign to Memory
+1 Cursecatcher
+1 Defend the Rider
+1 Delighted Halfling
+1 Delver of Secrets
+1 Disrupt
+1 Dreamroot Cascade
+1 Eidolon of Philosophy
+1 Elvish Mystic
+1 Essence Warden
+1 Fading Hope
+1 Flooded Grove
+1 Flusterstorm
+1 Gigadrowse
+1 Gitaxian Probe
+1 Haywire Mite
+1 Hedge Maze
+1 Hinterland Harbor
+1 Hurricane
+1 Ingenious Prodigy
+1 Insidious Fungus
+1 Jailbreak Scheme
+1 Karn's Bastion
+1 Leap
+1 Llanowar Elves
+1 Lost Jitte
+1 Metamorphic Blast
+1 Misty Rainforest
+1 Mockingbird
+1 Mystic Remora
+1 Mystic Sanctuary
+1 Nature's Claim
+1 Opt
+1 Otawara, Soaring City
+1 Peek
+1 Phantom Interference
+1 Pip-Boy 3000
+1 Ponder
+1 Pongify
+1 Preordain
+1 Quicken
+1 Rapid Hybridization
+1 Rejuvenating Springs
+1 Reliquary Tower
+1 Repeal
+1 Riptide
+1 Sapphire Charm
+1 Sensei's Divining Top
+1 Shadow Rift
+1 Skullclamp
+3 Snow-Covered Forest
+5 Snow-Covered Island
+1 Sol Ring
+1 Spectral Sailor
+1 Stifle
+1 Stone of Erech
+1 Stream of Unconsciousness
+1 Strix Serenade
+1 Swan Song
+1 Syncopate
+1 Take Down
+1 Thirsting Roots
+1 Three Steps Ahead
+1 Trash the Town
+1 Vastwood Fortification
+1 Veil of Summer
+1 Visions of Beyond
+1 Waterlogged Grove
+1 Wizard Class
+1 Yavimaya Coast
+1 Yavimaya, Cradle of Growth
+1 Zephyr Boots
+
+1 Tamiyo, Inquisitive Student

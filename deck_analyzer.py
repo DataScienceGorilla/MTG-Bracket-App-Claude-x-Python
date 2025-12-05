@@ -16,7 +16,6 @@ It checks for:
 
 import requests
 import time
-import synergy
 from typing import Dict, List, Any, Set, Tuple, Optional
 from dataclasses import dataclass, field
 from config import (
@@ -35,8 +34,18 @@ from scryfall_client import ScryfallClient, parse_decklist
 try:
     from spellbook_client import SpellbookClient, DeckCombos
     SPELLBOOK_AVAILABLE = True
-except ImportError:
+    SPELLBOOK_IMPORT_ERROR = None
+except ImportError as e:
     SPELLBOOK_AVAILABLE = False
+    SPELLBOOK_IMPORT_ERROR = str(e)
+
+# Optional import for theme detection
+try:
+    from theme_detector import ThemeDetector
+    THEME_DETECTOR_AVAILABLE = True
+except ImportError:
+    print("  ⚠️  ThemeDetector module not found, Bracket 1 theme analysis disabled")
+    THEME_DETECTOR_AVAILABLE = False
 
 
 @dataclass
@@ -111,8 +120,12 @@ class DeckAnalysis:
     has_cedh_combos: bool = False
     near_miss_combos: List[Dict[str, Any]] = field(default_factory=list)
     
-    # Synergy Score
-    synergy_score: float = 0.0
+    # Theme/Synergy data (for Bracket 1 detection)
+    synergy_score: float = 0.0           # How synergistic the cards are (0-100)
+    restriction_score: float = 0.0        # How theme-restricted the deck is (0-100)
+    detected_themes: List[str] = field(default_factory=list)  # e.g., ["single_artist", "set_restricted"]
+    theme_description: Optional[str] = None  # Human-readable theme description
+    bracket1_likelihood: float = 0.0      # Likelihood this is a Bracket 1 deck (0-100)
 
 
 class DeckAnalyzer:
@@ -133,6 +146,7 @@ class DeckAnalyzer:
                            a new one will be created.
         """
         self.scryfall = scryfall_client or ScryfallClient()
+        
         # Cache the official Game Changers list from Scryfall
         # This ensures we're using the most up-to-date list
         self._game_changers_cache = None
@@ -140,9 +154,6 @@ class DeckAnalyzer:
         # Cache for tutor list from Scryfall (fetched once per session)
         # This avoids hitting the API repeatedly for large analyses
         self._tutor_cache = None
-        
-        # Initialize Synergy Analyzer (FIXED: Added this initialization)
-        self.synergy_analyzer = synergy.SynergyAnalyzer()
     
     def fetch_non_ramp_tutors(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -156,7 +167,17 @@ class DeckAnalyzer:
         is unavailable.
         
         Returns:
-            Dictionary mapping card names to their data.
+            Dictionary mapping card names to their data:
+            {
+                "Demonic Tutor": {
+                    "mana_cost": "{1}{B}",
+                    "cmc": 2,
+                    "type": "Sorcery",
+                    "oracle_text": "Search your library...",
+                    "scryfall_uri": "https://..."
+                },
+                ...
+            }
         
         Note: Results are cached after first fetch to avoid repeated API calls.
         """
@@ -168,7 +189,7 @@ class DeckAnalyzer:
         
         # Query for tutors that aren't ramp or fetchlands
         # otag = oracle tag, curated by Scryfall
-        query = '(otag:tutor -otag:ramp -otag:fetchland)'
+        query = 'otag:tutor -otag:ramp -otag:fetchland'
         
         url = "https://api.scryfall.com/cards/search"
         params = {
@@ -200,19 +221,6 @@ class DeckAnalyzer:
                 # Process the batch of cards
                 for card in data.get('data', []):
                     name = card.get('name')
-                    
-                    # ---------------------------------------------------
-                    # ⛔ MANUAL BLOCK LIST
-                    # Explicitly skip cards you definitely don't want, 
-                    # even if Scryfall tags them as tutors.
-                    # ---------------------------------------------------
-                    cards_to_ignore = [
-                        "Land Tax", "Ash Barrens"
-                    ]
-                    
-                    if name in cards_to_ignore:
-                        continue
-                    # ---------------------------------------------------
                     
                     # Handle Mana Cost (check faces for MDFCs)
                     if 'mana_cost' in card:
@@ -253,19 +261,6 @@ class DeckAnalyzer:
             tutor_dictionary = self._build_fallback_tutor_dict()
         else:
             print(f"  ✅ Loaded {len(tutor_dictionary)} tutors from Scryfall")
-        
-        # ---------------------------------------------------------
-        # MANUAL OVERRIDES
-        # Add cards that were not captured by the Scryfall query.
-        # ---------------------------------------------------------
-        """ tutor_dictionary["Weathered Wayfarer"] = {
-             "mana_cost": "{W}",
-             "cmc": 1.0,
-             "type": "Creature — Human Cleric",
-             "oracle_text": "{W}, {T}: Search your library for a land card, reveal it, put it into your hand, then shuffle. Activate only if an opponent controls more lands than you.",
-             "scryfall_uri": "https://scryfall.com/card/2x2/34/weathered-wayfarer"
-        } """
-        # ---------------------------------------------------------
         
         # Cache the results
         self._tutor_cache = tutor_dictionary
@@ -324,6 +319,20 @@ class DeckAnalyzer:
         
         for card in cards:
             name = card.get("name", "")
+            
+            # ---------------------------------------------------
+                    # ⛔ MANUAL BLOCK LIST
+                    # Explicitly skip cards you definitely don't want, 
+                    # even if Scryfall tags them as tutors.
+                    # ---------------------------------------------------
+            cards_to_ignore = [
+                        "Land Tax",
+                        "Ash Barrens"
+                    ]
+                    
+            if name in cards_to_ignore:
+                 continue
+                    # ---------------------------------------------------
             
             # Check if this card is in our tutor database
             if name in tutor_list:
@@ -426,11 +435,6 @@ class DeckAnalyzer:
         # Step 10: ENHANCED - Check cEDH commander status
         cedh_commander_tier = self._check_cedh_commander(commander)
         
-        # Step 10.5: ENHANCED - Check Jank status via synergy score
-        print("  🤝 Calculating Synergy Score...")
-        synergy_score = self.synergy_analyzer.calculate_synergy_score(all_cards)
-        print(f"  ℹ️  Synergy Score: {synergy_score:.1f} (Threshold: {BRACKET_SCORING['jank_synergy_threshold']})")
-        
         # Step 11: Detect archetypes
         archetypes = self._detect_archetypes(all_cards)
         
@@ -457,7 +461,27 @@ class DeckAnalyzer:
             tutor_score=tutor_score
         )
         
-        # Step 16: ENHANCED - Calculate bracket with all new data
+        # Step 16: ENHANCED - Theme/Synergy detection for Bracket 1
+        theme_data = self._detect_theme_restrictions(all_cards)
+        synergy_score = self._calculate_synergy_score(all_cards)
+        
+        # Calculate Bracket 1 likelihood
+        bracket1_likelihood = 0.0
+        if THEME_DETECTOR_AVAILABLE:
+            detector = ThemeDetector()
+            bracket1_likelihood, b1_reason = detector.get_bracket1_likelihood(
+                synergy_score=synergy_score,
+                restriction_score=theme_data.get("restriction_score", 0),
+                game_changers_count=len(game_changers),
+                fast_mana_count=len(power_cards["fast_mana"]),
+                tutor_count=len(all_tutors),
+                has_mass_land_denial=len(mass_ld) > 0  # Only hard disqualifier for B1
+            )
+            if bracket1_likelihood >= 50:
+                print(f"  🎨 Bracket 1 signals detected: {bracket1_likelihood:.0f}% likelihood")
+                print(f"      {b1_reason}")
+        
+        # Step 17: ENHANCED - Calculate bracket with all new data
         bracket, reasoning = self._calculate_bracket_enhanced(
             game_changers_count=len(game_changers),
             has_mass_ld=len(mass_ld) > 0,
@@ -466,9 +490,11 @@ class DeckAnalyzer:
             fast_mana_count=len(power_cards["fast_mana"]),
             staple_count=len(power_cards["high_power_staples"]),
             cedh_signals=cedh_signals,
-            synergy_score=synergy_score,
             combo_data=combo_data,
-            archetypes=archetypes
+            archetypes=archetypes,
+            theme_data=theme_data,
+            synergy_score=synergy_score,
+            bracket1_likelihood=bracket1_likelihood
         )
         
         print(f"  🎯 Analysis complete! Suggested bracket: {bracket}")
@@ -515,7 +541,12 @@ class DeckAnalyzer:
             combo_count=combo_data.get("combo_count", 0),
             has_cedh_combos=combo_data.get("has_cedh_combos", False),
             near_miss_combos=combo_data.get("almost_included", []),
-            synergy_score=synergy_score
+            # Theme/synergy fields
+            synergy_score=synergy_score,
+            restriction_score=theme_data.get("restriction_score", 0),
+            detected_themes=theme_data.get("detected_themes", []),
+            theme_description=theme_data.get("restriction_description"),
+            bracket1_likelihood=bracket1_likelihood
         )
     
     def _detect_commander(self, cards: List[Dict[str, Any]]) -> str:
@@ -635,8 +666,8 @@ class DeckAnalyzer:
                         archetype_scores[archetype] += 1
                         break  # Don't double-count same card
         
-        # Return archetypes with significant presence (at least 5 cards)
-        threshold = 15  # Minimum number of matching cards to consider
+        # Return archetypes with significant presence (at least 15 cards)
+        threshold = 15
         detected = [
             archetype for archetype, score in archetype_scores.items()
             if score >= threshold
@@ -848,6 +879,102 @@ class DeckAnalyzer:
         
         return 0
     
+    def _detect_theme_restrictions(self, cards: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Detect potential Bracket 1 theme restrictions from card metadata.
+        
+        Uses ThemeDetector to analyze:
+        - Artist concentration (Rebecca Guay tribal)
+        - Set restriction (Kamigawa only)
+        - Rarity restriction (pauper style)
+        - Frame restriction (old border)
+        - Alphabet patterns
+        - Name word patterns
+        
+        Returns:
+            Dict with detected_themes, restriction_score, restriction_description
+        """
+        if not THEME_DETECTOR_AVAILABLE:
+            return {
+                "detected_themes": [],
+                "theme_details": {},
+                "restriction_score": 0,
+                "restriction_description": None
+            }
+        
+        print("  🎨 Checking for theme restrictions...")
+        detector = ThemeDetector()
+        result = detector.detect_themes(cards)
+        
+        if result["detected_themes"]:
+            print(f"      Detected: {', '.join(result['detected_themes'])}")
+            print(f"      Restriction score: {result['restriction_score']:.1f}")
+        else:
+            print("      No significant theme restrictions detected")
+        return result
+    
+    def _calculate_synergy_score(self, cards: List[Dict[str, Any]]) -> float:
+        """
+        Calculate how synergistic the deck's cards are.
+        
+        Uses keyword/mechanic analysis to detect:
+        - Tribal density (creature type concentration)
+        - Mechanical density (keyword concentration)
+        
+        A LOW synergy score combined with HIGH restriction score
+        suggests a Bracket 1 theme deck (restricted card pool).
+        
+        Returns:
+            Score from 0-100
+            < 15: Low synergy (possible Bracket 1)
+            15-30: Average synergy
+            > 30: High synergy (tribal or dedicated engine)
+        """
+        # Import synergy analyzer if available
+        try:
+            from synergy import SynergyAnalyzer
+            analyzer = SynergyAnalyzer()
+            score = analyzer.calculate_synergy_score(cards)
+            print(f"  🔗 Synergy score: {score:.1f}")
+            return score
+        except ImportError:
+            # Fallback: basic synergy calculation
+            return self._calculate_basic_synergy(cards)
+    
+    def _calculate_basic_synergy(self, cards: List[Dict[str, Any]]) -> float:
+        """
+        Fallback synergy calculation if synergy.py isn't available.
+        
+        Looks for:
+        - Creature type concentration (tribal)
+        - Keyword concentration
+        """
+        from collections import Counter
+        
+        # Get creature subtypes
+        subtypes = []
+        creature_count = 0
+        
+        for card in cards:
+            type_line = card.get("type_line", "")
+            if "Creature" in type_line and "Basic" not in type_line:
+                creature_count += 1
+                if "—" in type_line:
+                    parts = type_line.split("—")[1].strip().split()
+                    subtypes.extend(parts)
+        
+        if creature_count < 10:
+            return 0.0
+        
+        # Find most common subtype
+        if subtypes:
+            counts = Counter(subtypes)
+            _, top_count = counts.most_common(1)[0]
+            tribal_density = (top_count / creature_count) * 100
+            return tribal_density
+        
+        return 0.0
+    
     def _fetch_combos(self, cards: List[Dict[str, Any]], commander: str) -> Dict[str, Any]:
         """
         Fetch verified combos from Commander Spellbook.
@@ -868,7 +995,9 @@ class DeckAnalyzer:
         }
         
         if not SPELLBOOK_AVAILABLE:
-            print("  ⚠️  Commander Spellbook client not available")
+            error_msg = SPELLBOOK_IMPORT_ERROR or "Unknown error"
+            print(f"  ⚠️  Commander Spellbook client not available: {error_msg}")
+            print(f"      Make sure spellbook_client.py is in the same directory")
             return result
         
         print("  🔍 Checking Commander Spellbook for combos...", flush=True)
@@ -1023,9 +1152,11 @@ class DeckAnalyzer:
         fast_mana_count: int,
         staple_count: int,
         cedh_signals: int,
-        synergy_score: float,
         combo_data: Dict[str, Any],
-        archetypes: List[str]
+        archetypes: List[str],
+        theme_data: Dict[str, Any] = None,
+        synergy_score: float = 0.0,
+        bracket1_likelihood: float = 0.0
     ) -> Tuple[int, List[str]]:
         """
         Calculate the suggested bracket based on comprehensive deck analysis.
@@ -1037,29 +1168,25 @@ class DeckAnalyzer:
         - High-power staple density
         - Verified combo data from Commander Spellbook
         - cEDH signals for Bracket 5 detection
+        - Theme/synergy analysis for Bracket 1 detection
         
         Returns:
             Tuple of (bracket_number, list_of_reasons)
         """
         reasons = []
         bracket = 2  # Start at Core (default precon level)
+        theme_data = theme_data or {}
+        
+        
         
         # =====================================================================
-        # CHECK FOR BRACKET 5 (cEDH) FIRST
+        # CHECK FOR BRACKET 5 (cEDH)
         # =====================================================================
         if cedh_signals >= BRACKET_SCORING["cedh_signal_threshold"]:
             bracket = 5
             reasons.append(f"⚡ cEDH signals detected ({cedh_signals} points)")
             reasons.append("  Deck appears optimized for competitive play")
             # Still add other reasons for context
-        # =====================================================================
-        # CHECK FOR BRACKET 1 (Jank) SECOND
-        # =====================================================================
-        if synergy_score < BRACKET_SCORING["jank_synergy_threshold"]:
-            bracket = 1
-            reasons.append(f"🃏 Low synergy score ({synergy_score:.1f}) indicates jank/theme deck")
-            reasons.append("  Deck likely built for casual/artistic theme")
-            return bracket, reasons  # Jank overrides other considerations
         
         # =====================================================================
         # COMBO ANALYSIS (from Commander Spellbook)
@@ -1155,6 +1282,30 @@ class DeckAnalyzer:
             reasons.append("✅ No significant power indicators found")
             reasons.append("   Deck appears to be at precon power level")
         
+        # =====================================================================
+        # CHECK FOR BRACKET 1 (Theme/Exhibition) LAST
+        # =====================================================================
+        # Bracket 1 is defined by THEME, not by absence of power cards
+        # Only Mass Land Denial is a hard disqualifier (no thematic exceptions)
+        # Game Changers, Extra Turns, 2-Card Combos CAN be allowed if thematic
+        
+        if not has_mass_ld and bracket1_likelihood >= 70:
+            bracket = 1
+            restriction_desc = theme_data.get("restriction_description", "Theme detected")
+            reasons.append(f"🎨 Theme deck detected: {restriction_desc}")
+            reasons.append(f"  Bracket 1 likelihood: {bracket1_likelihood:.0f}%")
+            if game_changers_count > 0:
+                reasons.append(f"  Note: {game_changers_count} Game Changer(s) may be thematic exceptions")
+            if synergy_score < 20:
+                reasons.append(f"  Low synergy ({synergy_score:.1f}) suggests restricted card pool")
+            # Bracket 1 decks don't get bumped up by other signals - theme is intent
+        elif not has_mass_ld and bracket1_likelihood >= 50:
+            # Possible Bracket 1, but not confident enough to auto-assign
+            reasons.append(f"🎨 Possible theme deck ({bracket1_likelihood:.0f}% likelihood)")
+            if theme_data.get("restriction_description"):
+                reasons.append(f"  Detected: {theme_data['restriction_description']}")
+            if game_changers_count > 0:
+                reasons.append(f"  Has {game_changers_count} Game Changer(s) - verify if thematic")
         return bracket, reasons
     
     # Keep the old method for backwards compatibility but mark as deprecated
@@ -1182,7 +1333,6 @@ class DeckAnalyzer:
             fast_mana_count=0,
             staple_count=0,
             cedh_signals=0,
-            synergy_score=50.0,  # Default safe value for legacy calls
             combo_data={},
             archetypes=archetypes
         )
