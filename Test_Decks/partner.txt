@@ -1,0 +1,83 @@
+1 Aboleth Spawn
+1 Aclazotz, Deepest Betrayal
+1 Aerial Extortionist
+1 Arcane Sanctum
+1 Arcane Signet
+1 Archaeomancer's Map
+1 Archivist of Oghma
+1 Auriok Champion
+1 Authority of the Consuls
+1 Azorius Signet
+1 Blood Artist
+1 Blood Seeker
+1 Bold Plagiarist
+1 Breena, the Demagogue
+1 Chromatic Lantern
+1 Command Tower
+1 Consecrated Sphinx
+1 Cosi's Trickster
+1 Deep Gnome Terramancer
+1 Deep-Sea Kraken
+1 Dimir Signet
+1 Elenda, the Dusk Rose
+1 Esper Sentinel
+1 Exotic Orchard
+1 Faerie Artisans
+1 Faerie Mastermind
+1 Fellwar Stone
+1 Flooded Strand
+1 Ghostly Pilferer
+1 Gideon's Avenger
+1 Godless Shrine
+1 Hallowed Fountain
+7 Island
+1 Kamber, the Plunderer
+1 Lazav, Dimir Mastermind
+1 Leonin Elder
+1 Lotho, Corrupt Shirriff
+1 Mangara, the Diplomat
+1 Marsh Flats
+1 Meticulous Archive
+1 Mind's Dilation
+1 Mind's Eye
+1 Monologue Tax
+1 Morphic Pool
+1 Nightshade Harvester
+1 Orzhov Signet
+1 Patrolling Peacemaker
+7 Plains
+1 Polluted Delta
+1 Pollywog Prodigy
+1 Prison Term
+1 Raffine's Tower
+1 Rewards of Diversity
+1 Rhoda, Geist Avenger
+1 Rhystic Study
+1 Sangromancer
+1 Sea of Clouds
+1 Shadowy Backstreet
+1 Shattered Angel
+1 Sire of Stagnation
+1 Smothering Tithe
+1 Sol Ring
+1 Soul Warden
+1 Soul's Attendant
+1 Spectrum Sentinel
+1 Steelburr Champion
+1 Sunscorch Regent
+7 Swamp
+1 Talion, the Kindly Lord
+1 Talisman of Dominance
+1 Talisman of Hierarchy
+1 Talisman of Progress
+1 Tataru Taru
+1 Theoretical Duplication
+1 Trouble in Pairs
+1 Undercity Sewers
+1 Vault of Champions
+1 Watery Grave
+1 Wedding Ring
+1 Wizened Mentor
+
+1 Ishai, Ojutai Dragonspeaker
+1 Sengir, the Dark Baron

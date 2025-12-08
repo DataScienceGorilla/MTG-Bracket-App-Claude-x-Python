@@ -31,7 +31,8 @@ except ImportError:
     print("⚠️  anthropic package not installed. Run: pip install anthropic")
 
 from config import CLAUDE_MODEL, CLAUDE_MAX_TOKENS, BRACKET_DEFINITIONS
-from deck_analyzer import DeckAnalysis
+from deck_analyzer import DeckAnalysis, count_cards_with_quantity
+from scryfall_client import ScryfallClient
 
 # Import our Commander Spellbook client for verified combo data
 try:
@@ -105,6 +106,38 @@ class AIPlayAnalyzer:
             self._client = anthropic.Anthropic(api_key=self.api_key)
         return self._client
     
+    def _fetch_banned_cards(self) -> List[str]:
+        """
+        Fetch the Commander banned list from Scryfall.
+        
+        Returns:
+            List of banned card names
+        """
+        try:
+            client = ScryfallClient()
+            return client.fetch_commander_banned_cards()
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch ban list: {e}")
+            return self._get_fallback_banlist()
+    
+    def _get_fallback_banlist(self) -> List[str]:
+        """Hardcoded fallback ban list if Scryfall fails."""
+        return [
+            "Ancestral Recall", "Balance", "Biorhythm", "Black Lotus",
+            "Braids, Cabal Minion", "Channel", "Chaos Orb", "Coalition Victory",
+            "Dockside Extortionist", "Emrakul, the Aeons Torn", "Erayo, Soratami Ascendant",
+            "Falling Star", "Fastbond", "Flash", "Gifts Ungiven", "Golos, Tireless Pilgrim",
+            "Griselbrand", "Hullbreacher", "Iona, Shield of Emeria", "Jeweled Lotus",
+            "Karakas", "Leovold, Emissary of Trest", "Library of Alexandria",
+            "Limited Resources", "Lutri, the Spellchaser", "Mana Crypt", "Mox Emerald",
+            "Mox Jet", "Mox Pearl", "Mox Ruby", "Mox Sapphire", "Nadu, Winged Wisdom",
+            "Panoptic Mirror", "Paradox Engine", "Primeval Titan", "Prophet of Kruphix",
+            "Recurring Nightmare", "Rofellos, Llanowar Emissary", "Shahrazad",
+            "Sundering Titan", "Sway of the Stars", "Sylvan Primordial", "Time Vault",
+            "Time Walk", "Tinker", "Tolarian Academy", "Trade Secrets",
+            "Upheaval", "Worldfire", "Yawgmoth's Bargain"
+        ]
+    
     def generate_play_pattern_analysis(self, deck: DeckAnalysis) -> Optional[str]:
         """
         Generate a detailed analysis of how the deck plays.
@@ -130,6 +163,26 @@ class AIPlayAnalyzer:
         
         # Build the deck overview (stats, composition)
         deck_overview = self._build_deck_overview(deck)
+        
+        # NEW: Check for banned cards
+        banned_cards = self._fetch_banned_cards()
+        all_card_names = [c.get("name", "") for c in (
+            deck.creatures + deck.artifacts + deck.enchantments + 
+            deck.instants + deck.sorceries + deck.planeswalkers + deck.lands
+        )]
+        banned_in_deck = [c for c in all_card_names if c in banned_cards]
+        
+        ban_warning = ""
+        if banned_in_deck:
+            ban_warning = f"""
+⚠️ BANNED CARDS DETECTED:
+The following cards are BANNED in Commander and cannot be legally played:
+{chr(10).join(f'  - {c}' for c in banned_in_deck)}
+
+This deck is NOT legal for Commander play until these cards are removed.
+
+"""
+            print(f"  ⚠️ Found {len(banned_in_deck)} banned card(s): {', '.join(banned_in_deck)}")
         
         # NEW: Fetch verified combos from Commander Spellbook
         combo_section = self._fetch_combo_data(deck)
@@ -178,7 +231,7 @@ CARD REFERENCE (Use these exact oracle texts):
 DECK OVERVIEW:
 ---
 
-{deck_overview}
+{ban_warning}{deck_overview}
 
 ---
 {combo_section}
@@ -192,7 +245,7 @@ Based on the oracle text and verified combo data provided above, please analyze 
 
 1. **How This Deck Plays** (2-3 paragraphs)
    - What's the gameplan from turns 1-3? Turns 4-6? Late game?
-   - What does a "good draw" look like for this deck? As a reminder, the commander is always available in the command zone, and effectively an 8th card in the opening hand.
+   - What does a "good draw" look like for this deck? As a reminder, the commander is not drawn like other cards, it is ALWAYS available in the command zone, and effectively an extra card in the opening hand.
    - How interactive is it? Does it want to race or control?
 
 2. **Win Conditions** (brief list)
@@ -218,16 +271,29 @@ Based on the oracle text and verified combo data provided above, please analyze 
    - What are its vulnerabilities? (e.g., graveyard hate, board wipes, etc.)
 
 6. **Bracket Assessment**
-   - Based on how this deck *actually plays*, which bracket would you assign it to? A seperate aglorigthm has judged it to be Bracket {deck.suggested_bracket}, but your analysis may differ. If you disagree, explain why. 
-   - **Rule** if the deck could be realistically be played in 2 different brackets, declare the bracket that is furthest from 3.
-   - Look closely at the card list for *non-mechanical* themes. 
-         - Does this look like an "Art Theme" deck (e.g., "Ladies Looking Left", "Old People")?
-         - Is it a "Vorthos/Lore" deck (e.g., "All cards from Mirage block", "The story of Urza")?
-         - Is it a "Meme" deck (e.g., "All Old Border cards", "Cards with hats")?
-         - **Rule:** If the deck sacrifices mechanical viability for an aesthetic or joke theme, it is **Bracket 1**.
+   - Based on how this deck *actually plays*, which bracket would you assign it to? A separate algorithm has judged it to be Bracket {deck.suggested_bracket}, but your analysis may differ. If you disagree, explain why. 
+   - **Rule:** If the deck could realistically be played in 2 different brackets, declare the bracket that is furthest from 3.
+   
+   **CRITICAL - Understanding Bracket 1 (Exhibition):**
+   Bracket 1 is about INTENTIONAL RESTRICTION, not weakness or low power. A Bracket 1 deck:
+   - Prioritizes a theme, goal, or idea OVER optimal card choices, but optimal choices may still sneak in
+   - CAN include Game Changers, Extra Turns, and 2-Card Combos IF they fit the theme
+   - The ONLY hard disqualifier for Bracket 1 is Mass Land Denial (no exceptions)
+   - Can be powerful! A well-built theme deck can compete at Bracket 3 tables
+   - Examples: "Rebecca Guay art only", "Kamigawa block only", "Elder/old people tribal", "Chair tribal"
+   
+   Look for non-mechanical themes:
+   - Art themes (specific artist, "ladies looking left", color palette)
+   - Set/block restrictions (all Kamigawa, all old border)
+   - Vorthos/lore themes (story of Urza, Weatherlight crew)
+   - Word/name themes (cards with "fire" in name, alphabet decks)
+   - Meme restrictions (chairs in art, hats, animals)
+   
+   **Rule:** If the deck shows clear intentional restrictions that limit card choices, it is Bracket 1 - regardless of how powerful the deck may be.
+   **Rule:** An unfocused pile of weak cards with NO theme is NOT Bracket 1 - it's just a bad Bracket 2 deck.
+   
    - Justify your assessment with specific references to deck content and play patterns
    - Factor in the combo power level from the verified combos
-   - Any nuance? (e.g., "Technically bracket 3 due to Game Changers, but plays like bracket 2" or "This deck is super janky and unfocused, likely bracket 1")
 
 Keep the tone friendly and helpful - like explaining to someone at a game store. You should make fun of the user if you spot something silly in their deckbuilding choices. Reference specific cards by name when discussing synergies."""
 
@@ -274,7 +340,13 @@ Keep the tone friendly and helpful - like explaining to someone at a game store.
         
         current = deck.suggested_bracket
         target_def = BRACKET_DEFINITIONS.get(target_bracket, {})
-        direction = "down" if target_bracket < current else "up"
+        direction = "null"
+        if target_bracket < current:
+            direction = "down"
+        elif current > target_bracket:
+            direction = "up"
+        else:
+            direction = "within"
         
         prompt = f"""You are an expert Magic: The Gathering Commander deckbuilder.
 
@@ -296,7 +368,7 @@ DECK OVERVIEW:
 ADJUSTMENT REQUEST:
 ---
 
-The player wants to adjust this deck from Bracket {current} to Bracket {target_bracket}.
+The player wants to adjust this deck from Bracket {current} to Bracket {target_bracket}, if they are the same, suggest appropriate improvements that wouldn't change the bracket.
 
 Bracket {target_bracket} ({target_def.get('name', 'Unknown')}) expectations:
 - Game Changers allowed: {target_def.get('game_changers_allowed', 'Unknown')}
@@ -309,6 +381,7 @@ Please provide specific, actionable advice:
 1. **Cards to Remove** (if moving {direction})
    - List specific cards from this deck that should come out
    - Reference their oracle text to explain why they're problematic
+   - If the target bracket is 5, it is okay to suggest a commander replacement
 
 2. **Cards to Consider Adding**
    - Suggest 5-10 replacement cards that fit the target bracket
@@ -344,6 +417,9 @@ Keep it practical and specific to THIS deck."""
         so it doesn't have to guess or rely on potentially wrong memories.
         
         We skip well-known simple cards (Sol Ring, basic lands) to save tokens.
+        
+        Handles dual-faced cards (MDFCs, transform) by extracting text from
+        card_faces when present.
         """
         lines = []
         seen_cards = set()  # Avoid duplicates
@@ -377,34 +453,68 @@ Keep it practical and specific to THIS deck."""
             if "basic" in type_line and "land" in type_line:
                 continue
             
-            # Get card details
-            oracle_text = card.get("oracle_text", "")
-            mana_cost = card.get("mana_cost", "")
+            # Check if this is a dual-faced card (MDFC, transform, etc.)
+            card_faces = card.get("card_faces", [])
+            layout = card.get("layout", "normal")
             
-            # Format the card entry
-            lines.append(f"[{name}]")
-            lines.append(f"Type: {card.get('type_line', 'Unknown')}")
-            
-            if mana_cost:
-                lines.append(f"Cost: {mana_cost}")
-            
-            # Include power/toughness for creatures
-            power = card.get("power")
-            toughness = card.get("toughness")
-            if power is not None and toughness is not None:
-                lines.append(f"P/T: {power}/{toughness}")
-            
-            # Include loyalty for planeswalkers
-            loyalty = card.get("loyalty")
-            if loyalty is not None:
-                lines.append(f"Loyalty: {loyalty}")
-            
-            if oracle_text:
-                lines.append(f"Text: {oracle_text}")
+            if card_faces and layout in ("modal_dfc", "transform", "flip", "adventure"):
+                # Dual-faced card - extract text from each face
+                lines.append(f"[{name}]")
+                lines.append(f"Layout: {layout}")
+                lines.append(f"Type: {card.get('type_line', 'Unknown')}")
+                
+                for i, face in enumerate(card_faces):
+                    face_name = face.get("name", f"Face {i+1}")
+                    face_type = face.get("type_line", "Unknown")
+                    face_cost = face.get("mana_cost", "")
+                    face_text = face.get("oracle_text", "")
+                    face_power = face.get("power")
+                    face_toughness = face.get("toughness")
+                    
+                    lines.append(f"")
+                    lines.append(f"  --- {face_name} ---")
+                    lines.append(f"  Type: {face_type}")
+                    if face_cost:
+                        lines.append(f"  Cost: {face_cost}")
+                    if face_power is not None and face_toughness is not None:
+                        lines.append(f"  P/T: {face_power}/{face_toughness}")
+                    if face_text:
+                        # Indent the oracle text for readability
+                        indented_text = face_text.replace("\n", "\n  ")
+                        lines.append(f"  Text: {indented_text}")
+                    else:
+                        lines.append(f"  Text: (no rules text)")
+                
+                lines.append("")  # Blank line between cards
             else:
-                lines.append("Text: (no rules text)")
-            
-            lines.append("")  # Blank line between cards
+                # Regular single-faced card
+                oracle_text = card.get("oracle_text", "")
+                mana_cost = card.get("mana_cost", "")
+                
+                # Format the card entry
+                lines.append(f"[{name}]")
+                lines.append(f"Type: {card.get('type_line', 'Unknown')}")
+                
+                if mana_cost:
+                    lines.append(f"Cost: {mana_cost}")
+                
+                # Include power/toughness for creatures
+                power = card.get("power")
+                toughness = card.get("toughness")
+                if power is not None and toughness is not None:
+                    lines.append(f"P/T: {power}/{toughness}")
+                
+                # Include loyalty for planeswalkers
+                loyalty = card.get("loyalty")
+                if loyalty is not None:
+                    lines.append(f"Loyalty: {loyalty}")
+                
+                if oracle_text:
+                    lines.append(f"Text: {oracle_text}")
+                else:
+                    lines.append("Text: (no rules text)")
+                
+                lines.append("")  # Blank line between cards
         
         if not lines:
             return "(No detailed card data available - using card names only)"
@@ -435,24 +545,34 @@ Keep it practical and specific to THIS deck."""
         lines.append(f"- Suggested Bracket: {deck.suggested_bracket}")
         lines.append("")
         
+        # Helper alias for cleaner code
+        count = count_cards_with_quantity
+        
         # Card composition (counts only - oracle text is in the reference section)
+        # Using count() to handle multiples (basic lands, "any number" cards)
         lines.append("**Card Counts:**")
-        lines.append(f"- Creatures: {len(deck.creatures)}")
-        lines.append(f"- Artifacts: {len(deck.artifacts)}")
-        lines.append(f"- Enchantments: {len(deck.enchantments)}")
-        lines.append(f"- Instants: {len(deck.instants)}")
-        lines.append(f"- Sorceries: {len(deck.sorceries)}")
-        lines.append(f"- Planeswalkers: {len(deck.planeswalkers)}")
-        lines.append(f"- Lands: {len(deck.lands)}")
+        lines.append(f"- Creatures: {count(deck.creatures)}")
+        lines.append(f"- Artifacts: {count(deck.artifacts)}")
+        lines.append(f"- Enchantments: {count(deck.enchantments)}")
+        lines.append(f"- Instants: {count(deck.instants)}")
+        lines.append(f"- Sorceries: {count(deck.sorceries)}")
+        lines.append(f"- Planeswalkers: {count(deck.planeswalkers)}")
+        
+        # Land count with MDFC info
+        land_count = count(deck.lands)
+        if deck.mdfc_land_count > 0:
+            lines.append(f"- Lands: {land_count} ({deck.effective_land_count} effective including {deck.mdfc_land_count} MDFC land-backs)")
+        else:
+            lines.append(f"- Lands: {land_count}")
         lines.append("")
         
         # Mana curve
         lines.append("**Mana Curve (non-land cards):**")
         for cmc in sorted(deck.mana_curve.keys()):
-            count = deck.mana_curve[cmc]
-            bar = "█" * min(count, 15)
+            cmc_count = deck.mana_curve[cmc]  # Renamed to avoid shadowing count()
+            bar = "█" * min(cmc_count, 15)
             cmc_label = f"{cmc}+" if cmc == 7 else str(cmc)
-            lines.append(f"  {cmc_label}: {bar} ({count})")
+            lines.append(f"  {cmc_label}: {bar} ({cmc_count})")
         
         return "\n".join(lines)
     
@@ -548,10 +668,10 @@ Keep it practical and specific to THIS deck."""
         lines.extend([
             "",
             "### Deck Statistics:",
-            f"- Total Non-Land Cards: {deck.total_cards - len(deck.lands)}",
+            f"- Total Non-Land Cards: {deck.total_cards - count_cards_with_quantity(deck.lands)}",
             f"- Average Mana Value: {deck.average_cmc}",
-            f"- Creatures: {len(deck.creatures)}",
-            f"- Removal/Interaction: {len(deck.instants) + len(deck.sorceries)}",
+            f"- Creatures: {count_cards_with_quantity(deck.creatures)}",
+            f"- Removal/Interaction: {count_cards_with_quantity(deck.instants) + count_cards_with_quantity(deck.sorceries)}",
         ])
         
         return "\n".join(lines)

@@ -26,8 +26,36 @@ from config import (
     FAST_MANA, FREE_INTERACTION, COMPETITIVE_STAX,
     CEDH_COMBO_PIECES, HIGH_POWER_STAPLES,
     TUTORS_PREMIUM, TUTORS_EFFICIENT, TUTORS_STANDARD, TUTORS_SLOW,
-    BRACKET_SCORING
+    BRACKET_SCORING,
+    # Singleton exception cards
+    UNLIMITED_COPIES_CARDS, LIMITED_COPIES_CARDS, BASIC_LAND_NAMES
 )
+
+
+# =============================================================================
+# Helper function for counting cards with quantities
+# =============================================================================
+
+def count_cards_with_quantity(cards: List[Dict[str, Any]]) -> int:
+    """
+    Count total cards in a list, respecting quantities.
+    
+    Cards with _quantity field are counted that many times.
+    This correctly handles:
+    - Basic lands (e.g., 10x Island)
+    - "Any number" cards (e.g., 30x Shadowborn Apostle)
+    
+    Example:
+        30x Shadowborn Apostle stored as one dict with _quantity=30
+        → returns 30, not 1
+    
+    Args:
+        cards: List of card dicts, each may have _quantity field
+        
+    Returns:
+        Total card count (sum of quantities)
+    """
+    return sum(card.get("_quantity", 1) for card in cards)
 from scryfall_client import ScryfallClient, parse_decklist
 
 # Optional import for combo detection
@@ -44,7 +72,6 @@ try:
     from theme_detector import ThemeDetector
     THEME_DETECTOR_AVAILABLE = True
 except ImportError:
-    print("  ⚠️  ThemeDetector module not found, Bracket 1 theme analysis disabled")
     THEME_DETECTOR_AVAILABLE = False
 
 
@@ -126,6 +153,15 @@ class DeckAnalysis:
     detected_themes: List[str] = field(default_factory=list)  # e.g., ["single_artist", "set_restricted"]
     theme_description: Optional[str] = None  # Human-readable theme description
     bracket1_likelihood: float = 0.0      # Likelihood this is a Bracket 1 deck (0-100)
+    
+    # Legality warnings (illegal duplicates, banned cards, etc.)
+    legality_warnings: List[str] = field(default_factory=list)
+    
+    # MDFC tracking (Modal Double-Faced Cards with land backs)
+    # These are categorized by their front face but can be played as lands
+    mdfc_lands: List[Dict[str, Any]] = field(default_factory=list)  # Cards with land on back
+    mdfc_land_count: int = 0  # Count of MDFCs that have land backs
+    effective_land_count: int = 0  # lands + mdfc_lands for consistency calculations
 
 
 class DeckAnalyzer:
@@ -154,6 +190,103 @@ class DeckAnalyzer:
         # Cache for tutor list from Scryfall (fetched once per session)
         # This avoids hitting the API repeatedly for large analyses
         self._tutor_cache = None
+    
+    def _count_cards(self, cards: List[Dict[str, Any]]) -> int:
+        """
+        Count total cards in a list, respecting quantities.
+        
+        Wrapper around module-level count_cards_with_quantity().
+        """
+        return count_cards_with_quantity(cards)
+    
+    def _validate_card_quantities(self, parsed_cards: List[Dict[str, Any]]) -> List[str]:
+        """
+        Check for illegal duplicate cards in Commander.
+        
+        Commander is singleton format - only 1 copy of each card allowed,
+        with exceptions for:
+        - Basic lands (unlimited)
+        - "Any number" cards like Relentless Rats (unlimited)
+        - Special cases like Seven Dwarves (up to 7) and Nazgûl (up to 9)
+        
+        Args:
+            parsed_cards: List of {"name": str, "quantity": int} dicts
+            
+        Returns:
+            List of warning strings for illegal duplicates
+        """
+        warnings = []
+        
+        for card in parsed_cards:
+            name = card.get("name", "")
+            name_lower = name.lower()
+            quantity = card.get("quantity", 1)
+            
+            if quantity <= 1:
+                continue  # No issue
+            
+            # Check if it's a basic land (unlimited allowed)
+            if name_lower in BASIC_LAND_NAMES:
+                continue
+            
+            # Check if it's an "any number" card (unlimited allowed)
+            if name_lower in UNLIMITED_COPIES_CARDS:
+                continue
+            
+            # Check if it's a limited-copies card
+            if name_lower in LIMITED_COPIES_CARDS:
+                limit = LIMITED_COPIES_CARDS[name_lower]
+                if quantity > limit:
+                    warnings.append(
+                        f"⚠️ ILLEGAL: {quantity}x {name} (max {limit} allowed)"
+                    )
+                continue
+            
+            # Any other card with >1 copy is illegal in Commander
+            warnings.append(
+                f"⚠️ ILLEGAL: {quantity}x {name} (Commander is singleton - only 1 copy allowed)"
+            )
+        
+        return warnings
+    
+    def _find_mdfc_lands(self, cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Find Modal Double-Faced Cards (MDFCs) that have a land on the back.
+        
+        These cards are categorized by their front face (spell) but can
+        also be played as lands, contributing to mana consistency.
+        
+        Examples:
+        - Malakir Rebirth // Malakir Mire (Instant // Land)
+        - Bala Ged Recovery // Bala Ged Sanctuary (Sorcery // Land)
+        - Agadeem's Awakening // Agadeem, the Undercrypt (Sorcery // Land)
+        
+        Args:
+            cards: List of card data dicts from Scryfall
+            
+        Returns:
+            List of cards that are MDFCs with land backs
+        """
+        mdfc_lands = []
+        
+        for card in cards:
+            # Check if it's a modal DFC
+            layout = card.get("layout", "")
+            if layout != "modal_dfc":
+                continue
+            
+            # Check if the back face is a land
+            card_faces = card.get("card_faces", [])
+            if len(card_faces) >= 2:
+                back_face = card_faces[1]
+                front_face = card_faces[0]
+                back_type = back_face.get("type_line", "")
+                front_type = front_face.get("type_line", "")
+                # If back face is a land, this is an MDFC land
+                if "Land" in back_type and "Land" not in front_type:
+                    mdfc_lands.append(card)
+        
+        return mdfc_lands
     
     def fetch_non_ramp_tutors(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -320,20 +453,6 @@ class DeckAnalyzer:
         for card in cards:
             name = card.get("name", "")
             
-            # ---------------------------------------------------
-                    # ⛔ MANUAL BLOCK LIST
-                    # Explicitly skip cards you definitely don't want, 
-                    # even if Scryfall tags them as tutors.
-                    # ---------------------------------------------------
-            cards_to_ignore = [
-                        "Land Tax",
-                        "Ash Barrens"
-                    ]
-                    
-            if name in cards_to_ignore:
-                 continue
-                    # ---------------------------------------------------
-            
             # Check if this card is in our tutor database
             if name in tutor_list:
                 tutors.append(name)
@@ -385,6 +504,13 @@ class DeckAnalyzer:
         print("  📝 Parsing decklist...")
         parsed_cards = parse_decklist(decklist_text)
         
+        # Step 1.5: Validate card quantities (check for illegal duplicates)
+        legality_warnings = self._validate_card_quantities(parsed_cards)
+        if legality_warnings:
+            print(f"  ⚠️ Found {len(legality_warnings)} legality issue(s):")
+            for warning in legality_warnings:
+                print(f"      {warning}")
+        
         # Step 2: Fetch card data from Scryfall
         print("  🌐 Fetching card data from Scryfall...")
         card_names = [card["name"] for card in parsed_cards]
@@ -413,6 +539,17 @@ class DeckAnalyzer:
         
         # Step 5: Categorize cards by type
         categorized = self._categorize_cards(all_cards)
+        
+        # Step 5.5: Find MDFCs with land backs (for mana base evaluation)
+        mdfc_lands = self._find_mdfc_lands(all_cards)
+        mdfc_land_count = self._count_cards(mdfc_lands)
+        land_count = self._count_cards(categorized["lands"])
+        effective_land_count = land_count + mdfc_land_count
+        
+        if mdfc_lands:
+            mdfc_names = [c.get("name", "").split(" // ")[0] for c in mdfc_lands]
+            print(f"  🃏 Found {len(mdfc_lands)} MDFC(s) with land backs: {', '.join(mdfc_names[:3])}{'...' if len(mdfc_names) > 3 else ''}")
+            print(f"      Lands: {land_count} ({effective_land_count} effective including MDFCs)")
         
         # Step 6: Find Game Changers
         game_changers = self._find_game_changers(all_cards)
@@ -456,7 +593,7 @@ class DeckAnalyzer:
             free_interaction_count=len(power_cards["free_interaction"]),
             stax_count=len(power_cards["competitive_stax"]),
             avg_cmc=avg_cmc,
-            land_count=len(categorized["lands"]),
+            land_count=effective_land_count,  # Use effective count (includes MDFCs)
             combo_data=combo_data,
             tutor_score=tutor_score
         )
@@ -503,7 +640,7 @@ class DeckAnalyzer:
         
         return DeckAnalysis(
             commander=commander or "Unknown",
-            total_cards=len(all_cards),
+            total_cards=self._count_cards(all_cards),
             game_changers_found=game_changers,
             game_changers_count=len(game_changers),
             mass_land_denial_cards=mass_ld,
@@ -546,7 +683,13 @@ class DeckAnalyzer:
             restriction_score=theme_data.get("restriction_score", 0),
             detected_themes=theme_data.get("detected_themes", []),
             theme_description=theme_data.get("restriction_description"),
-            bracket1_likelihood=bracket1_likelihood
+            bracket1_likelihood=bracket1_likelihood,
+            # Legality
+            legality_warnings=legality_warnings,
+            # MDFC tracking
+            mdfc_lands=mdfc_lands,
+            mdfc_land_count=mdfc_land_count,
+            effective_land_count=effective_land_count
         )
     
     def _detect_commander(self, cards: List[Dict[str, Any]]) -> str:
@@ -666,7 +809,7 @@ class DeckAnalyzer:
                         archetype_scores[archetype] += 1
                         break  # Don't double-count same card
         
-        # Return archetypes with significant presence (at least 15 cards)
+        # Return archetypes with significant presence (at least 5 cards)
         threshold = 15
         detected = [
             archetype for archetype, score in archetype_scores.items()
@@ -909,8 +1052,7 @@ class DeckAnalyzer:
         if result["detected_themes"]:
             print(f"      Detected: {', '.join(result['detected_themes'])}")
             print(f"      Restriction score: {result['restriction_score']:.1f}")
-        else:
-            print("      No significant theme restrictions detected")
+        
         return result
     
     def _calculate_synergy_score(self, cards: List[Dict[str, Any]]) -> float:
@@ -1177,7 +1319,30 @@ class DeckAnalyzer:
         bracket = 2  # Start at Core (default precon level)
         theme_data = theme_data or {}
         
+        # =====================================================================
+        # CHECK FOR BRACKET 1 (Theme/Exhibition) FIRST
+        # =====================================================================
+        # Bracket 1 is defined by THEME, not by absence of power cards
+        # Only Mass Land Denial is a hard disqualifier (no thematic exceptions)
+        # Game Changers, Extra Turns, 2-Card Combos CAN be allowed if thematic
         
+        if not has_mass_ld and bracket1_likelihood >= 70:
+            bracket = 1
+            restriction_desc = theme_data.get("restriction_description", "Theme detected")
+            reasons.append(f"🎨 Theme deck detected: {restriction_desc}")
+            reasons.append(f"  Bracket 1 likelihood: {bracket1_likelihood:.0f}%")
+            if game_changers_count > 0:
+                reasons.append(f"  Note: {game_changers_count} Game Changer(s) may be thematic exceptions")
+            if synergy_score < 20:
+                reasons.append(f"  Low synergy ({synergy_score:.1f}) suggests restricted card pool")
+            # Bracket 1 decks don't get bumped up by other signals - theme is intent
+        elif not has_mass_ld and bracket1_likelihood >= 50:
+            # Possible Bracket 1, but not confident enough to auto-assign
+            reasons.append(f"🎨 Possible theme deck ({bracket1_likelihood:.0f}% likelihood)")
+            if theme_data.get("restriction_description"):
+                reasons.append(f"  Detected: {theme_data['restriction_description']}")
+            if game_changers_count > 0:
+                reasons.append(f"  Has {game_changers_count} Game Changer(s) - verify if thematic")
         
         # =====================================================================
         # CHECK FOR BRACKET 5 (cEDH)
@@ -1282,30 +1447,6 @@ class DeckAnalyzer:
             reasons.append("✅ No significant power indicators found")
             reasons.append("   Deck appears to be at precon power level")
         
-        # =====================================================================
-        # CHECK FOR BRACKET 1 (Theme/Exhibition) LAST
-        # =====================================================================
-        # Bracket 1 is defined by THEME, not by absence of power cards
-        # Only Mass Land Denial is a hard disqualifier (no thematic exceptions)
-        # Game Changers, Extra Turns, 2-Card Combos CAN be allowed if thematic
-        
-        if not has_mass_ld and bracket1_likelihood >= 70:
-            bracket = 1
-            restriction_desc = theme_data.get("restriction_description", "Theme detected")
-            reasons.append(f"🎨 Theme deck detected: {restriction_desc}")
-            reasons.append(f"  Bracket 1 likelihood: {bracket1_likelihood:.0f}%")
-            if game_changers_count > 0:
-                reasons.append(f"  Note: {game_changers_count} Game Changer(s) may be thematic exceptions")
-            if synergy_score < 20:
-                reasons.append(f"  Low synergy ({synergy_score:.1f}) suggests restricted card pool")
-            # Bracket 1 decks don't get bumped up by other signals - theme is intent
-        elif not has_mass_ld and bracket1_likelihood >= 50:
-            # Possible Bracket 1, but not confident enough to auto-assign
-            reasons.append(f"🎨 Possible theme deck ({bracket1_likelihood:.0f}% likelihood)")
-            if theme_data.get("restriction_description"):
-                reasons.append(f"  Detected: {theme_data['restriction_description']}")
-            if game_changers_count > 0:
-                reasons.append(f"  Has {game_changers_count} Game Changer(s) - verify if thematic")
         return bracket, reasons
     
     # Keep the old method for backwards compatibility but mark as deprecated

@@ -1,0 +1,81 @@
+1 Bitterblossom
+1 Black Market Connections
+1 Bojuka Bog
+1 Bontu's Monument
+1 Butch DeLoria, Tunnel Snake
+1 Cabal Coffers
+1 Cabal Stronghold
+1 Castle Locthwain
+1 Changeling Outcast
+1 Consuming Corruption
+1 Crypt Ghast
+1 Dark Ritual
+1 Defile
+1 Desmond Miles
+1 Doom Blade
+1 Emergence Zone
+1 Exsanguinate
+1 Fandaniel, Telophoroi Ascian
+1 Feed the Cycle
+1 Feed the Swarm
+1 Fell the Profane
+1 Flare of Malice
+1 Force of Despair
+1 Forsaken Miner
+1 Gisa, the Hellraiser
+1 Go for the Throat
+1 Gonti, Night Minister
+1 Grim Hireling
+1 Hooded Blightfang
+1 In Garruk's Wake
+1 Into the Pit
+1 Jet Medallion
+1 Kaervek, the Punisher
+1 Lethal Scheme
+1 Lightning Greaves
+1 Make an Example
+1 Malakir Rebirth
+1 Malicious Affliction
+1 Marionette Apprentice
+1 Mirkwood Bats
+1 Morbid Opportunist
+1 Nowhere to Run
+1 Nykthos, Shrine to Nyx
+1 Obsessive Pursuit
+1 Oona's Blackguard
+1 Orochi Soul-Reaver
+1 Phoenix Fleet Airship
+1 Popular Egotist
+1 Prickly Boggart
+1 Rev, Tithe Extractor
+1 Rogue's Passage
+1 Shadow Alley Denizen
+1 Shadow, Mysterious Assassin
+1 Sheoldred's Edict
+1 Shoot the Sheriff
+1 Sign in Blood
+1 Sol Ring
+1 Soul Shatter
+1 Spymaster's Vault
+1 Stalactite Stalker
+1 Suspended Sentence
+21 Swamp
+1 Swiftfoot Boots
+1 Torment of Hailfire
+1 Tragic Slip
+1 Unstoppable Slasher
+1 Urborg, Tomb of Yawgmoth
+1 V.A.T.S.
+1 Vampire Cutthroat
+1 Varragoth, Bloodsky Sire
+1 Vein Ripper
+1 Vincent Valentine
+1 Viridian Longbow
+1 Virtus's Maneuver
+1 Vona's Hunger
+1 Vorpal Sword
+1 War Room
+1 Withering Torment
+1 Zulaport Cutthroat
+
+1 Mari, the Killing Quill

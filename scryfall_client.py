@@ -293,6 +293,38 @@ class ScryfallClient:
         
         cards = self.search_cards("is:gamechanger")
         return [card.get("name", "") for card in cards]
+    
+    def fetch_commander_banned_cards(self) -> List[str]:
+        """
+        Fetch the current Commander banned list from Scryfall.
+        
+        Returns:
+            List of banned card names
+        """
+        try:
+            cards = self.search_cards("banned:commander")
+            banned = [card.get("name", "") for card in cards]
+            return banned if banned else self._get_fallback_banlist()
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch ban list: {e}")
+            return self._get_fallback_banlist()
+        
+    def _get_fallback_banlist(self) -> List[str]:
+        """Hardcoded fallback if Scryfall fails."""
+        return [
+            "Ancestral Recall", "Balance", "Biorhythm", "Black Lotus", "Channel", "Chaos Orb",
+            "Dockside Extortionist", "Emrakul, the Aeons Torn", "Erayo, Soratami Ascendant",
+            "Falling Star", "Fastbond", "Flash", "Golos, Tireless Pilgrim",
+            "Griselbrand", "Hullbreacher", "Iona, Shield of Emeria", "Jeweled Lotus",
+            "Karakas", "Leovold, Emissary of Trest", "Library of Alexandria",
+            "Limited Resources", "Lutri, the Spellchaser", "Mana Crypt", "Mox Emerald",
+            "Mox Jet", "Mox Pearl", "Mox Ruby", "Mox Sapphire", "Nadu, Winged Wisdom",
+            "Paradox Engine", "Primeval Titan", "Prophet of Kruphix",
+            "Recurring Nightmare", "Rofellos, Llanowar Emissary", "Shahrazad",
+            "Sundering Titan", "Sylvan Primordial", "Time Vault",
+            "Time Walk", "Tinker", "Tolarian Academy", "Trade Secrets",
+            "Upheaval", "Yawgmoth's Bargain"
+        ]
 
 
 def parse_decklist(decklist_text: str) -> List[Dict[str, Any]]:

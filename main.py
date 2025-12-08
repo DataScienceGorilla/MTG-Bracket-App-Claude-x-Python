@@ -31,7 +31,7 @@ import os
 from typing import Optional
 
 # Import our modules
-from deck_analyzer import DeckAnalyzer, DeckAnalysis
+from deck_analyzer import DeckAnalyzer, DeckAnalysis, count_cards_with_quantity
 from ai_analyzer import AIPlayAnalyzer
 from dotenv import load_dotenv
 from config import BRACKET_DEFINITIONS
@@ -151,15 +151,20 @@ def print_analysis_results(deck: DeckAnalysis):
         print(f"    {cmc_label} │ {bar} ({count})")
     
     # Card composition summary
+    land_count = count_cards_with_quantity(deck.lands)
+    if deck.mdfc_land_count > 0:
+        land_str = f"{land_count:3d}  ({deck.effective_land_count} effective incl. {deck.mdfc_land_count} MDFCs)"
+    else:
+        land_str = f"{land_count:3d}"
     print_section_header("📦 CARD COMPOSITION")
     print(f"""
-    Creatures:     {len(deck.creatures):3d}
-    Artifacts:     {len(deck.artifacts):3d}
-    Enchantments:  {len(deck.enchantments):3d}
-    Instants:      {len(deck.instants):3d}
-    Sorceries:     {len(deck.sorceries):3d}
-    Planeswalkers: {len(deck.planeswalkers):3d}
-    Lands:         {len(deck.lands):3d}
+    Creatures:     {count_cards_with_quantity(deck.creatures):3d}
+    Artifacts:     {count_cards_with_quantity(deck.artifacts):3d}
+    Enchantments:  {count_cards_with_quantity(deck.enchantments):3d}
+    Instants:      {count_cards_with_quantity(deck.instants):3d}
+    Sorceries:     {count_cards_with_quantity(deck.sorceries):3d}
+    Planeswalkers: {count_cards_with_quantity(deck.planeswalkers):3d}
+    Lands:         {land_str}
 """)
 
 

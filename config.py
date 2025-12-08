@@ -312,6 +312,7 @@ CEDH_COMMANDERS_TIER2 = [
     "Light-Paws, Emperor's Voice",
     "Krark, the Thumbless",  # Partner with Sakashima
     "Minsc & Boo, Timeless Heroes",
+    "Shorikai, Genesis Engine",
 ]
 
 
@@ -604,6 +605,30 @@ HIGH_POWER_STAPLES = [
     "Boseiju, Who Endures",
 ]
 
+# Cards that allow multiple copies in Commander (singleton exception)
+UNLIMITED_COPIES_CARDS = {
+    # These cards have "A deck can have any number of cards named ~"
+    "relentless rats",
+    "rat colony", 
+    "shadowborn apostle",
+    "persistent petitioners",
+    "dragon's approach",
+    "slime against humanity",
+    "hare apparent",
+}
+
+# Cards with specific copy limits (not singleton, but not unlimited)
+LIMITED_COPIES_CARDS = {
+    "seven dwarves": 7,
+    "nazgûl": 9,
+}
+
+# Basic land names (unlimited copies allowed)
+BASIC_LAND_NAMES = {
+    "plains", "island", "swamp", "mountain", "forest", "wastes",
+    "snow-covered plains", "snow-covered island", "snow-covered swamp",
+    "snow-covered mountain", "snow-covered forest",
+}
 
 # ============================================================================
 # SCORING WEIGHTS FOR BRACKET CALCULATION
@@ -636,7 +661,7 @@ BRACKET_SCORING = {
     "combo_bracket4_tags": ["R"],              # Ruthless
     
     # cEDH signal threshold
-    "cedh_signal_threshold": 8,  # 8+ cEDH signals = Bracket 5
+    "cedh_signal_threshold": 12,  # 12+ cEDH signals = Bracket 5
     
     # Average CMC thresholds
     "avg_cmc_cedh": 2.0,       # Avg CMC < 2.0 is cEDH signal

@@ -39,8 +39,8 @@ class ThemeDetector:
         "set_concentration": 0.60,         # 60%+ from one set (non-precon)
         "block_concentration": 0.70,       # 70%+ from one block
         "rarity_concentration": 0.80,      # 80%+ same rarity is intentional
-        "cmc_concentration": 0.50,         # 50%+ same CMC is a restriction
-        "alphabet_coverage": 0.70,         # 70%+ of alphabet = alphabet deck
+        "cmc_concentration": 1.0,         # 100%+ same CMC is a restriction
+        "alphabet_coverage": 1.0,         # 100% of alphabet = alphabet deck
         "frame_concentration": 0.85,       # 85%+ same frame (old border tribal)
     }
     
@@ -139,12 +139,12 @@ class ThemeDetector:
         
         alphabet_result = self._check_alphabet_pattern(non_basics)
         if alphabet_result:
-            detections.append(("alphabet_deck", alphabet_result, 40))
+            detections.append(("alphabet_deck", alphabet_result, 15))
             result["theme_details"]["alphabet"] = alphabet_result
         
         cmc_result = self._check_cmc_concentration(non_basics)
         if cmc_result:
-            detections.append(("cmc_restricted", cmc_result, 15))
+            detections.append(("cmc_restricted", cmc_result, 50))
             result["theme_details"]["cmc"] = cmc_result
         
         frame_result = self._check_frame_concentration(non_basics)
@@ -154,7 +154,7 @@ class ThemeDetector:
         
         word_result = self._check_name_word_pattern(non_basics)
         if word_result:
-            detections.append(("name_theme", word_result, 30))
+            detections.append(("name_theme", word_result, 40))
             result["theme_details"]["name_word"] = word_result
         
         # Calculate overall restriction score
