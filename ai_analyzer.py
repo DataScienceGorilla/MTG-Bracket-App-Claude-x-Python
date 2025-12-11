@@ -245,7 +245,7 @@ Based on the oracle text and verified combo data provided above, please analyze 
 
 1. **How This Deck Plays** (2-3 paragraphs)
    - What's the gameplan from turns 1-3? Turns 4-6? Late game?
-   - What does a "good draw" look like for this deck? As a reminder, the commander is not drawn like other cards, it is ALWAYS available in the command zone, and effectively an extra card in the opening hand.
+   - What does a "good draw" look like for this deck? As a reminder, the commander is always available in the command zone, and effectively an 8th card in the opening hand.
    - How interactive is it? Does it want to race or control?
 
 2. **Win Conditions** (brief list)
@@ -276,7 +276,7 @@ Based on the oracle text and verified combo data provided above, please analyze 
    
    **CRITICAL - Understanding Bracket 1 (Exhibition):**
    Bracket 1 is about INTENTIONAL RESTRICTION, not weakness or low power. A Bracket 1 deck:
-   - Prioritizes a theme, goal, or idea OVER optimal card choices, but optimal choices may still sneak in
+   - Prioritizes a theme, goal, or idea OVER optimal card choices
    - CAN include Game Changers, Extra Turns, and 2-Card Combos IF they fit the theme
    - The ONLY hard disqualifier for Bracket 1 is Mass Land Denial (no exceptions)
    - Can be powerful! A well-built theme deck can compete at Bracket 3 tables
@@ -289,7 +289,7 @@ Based on the oracle text and verified combo data provided above, please analyze 
    - Word/name themes (cards with "fire" in name, alphabet decks)
    - Meme restrictions (chairs in art, hats, animals)
    
-   **Rule:** If the deck shows clear intentional restrictions that limit card choices, it is Bracket 1 - regardless of how powerful the deck may be.
+   **Rule:** If the deck shows clear intentional restrictions that limit optimal card choices, it is Bracket 1 - regardless of whether some powerful cards snuck in thematically.
    **Rule:** An unfocused pile of weak cards with NO theme is NOT Bracket 1 - it's just a bad Bracket 2 deck.
    
    - Justify your assessment with specific references to deck content and play patterns
@@ -320,7 +320,8 @@ Keep the tone friendly and helpful - like explaining to someone at a game store.
         target_bracket: int
     ) -> Optional[str]:
         """
-        Generate advice for adjusting a deck to hit a specific bracket.
+        Generate advice for adjusting a deck to hit a specific bracket,
+        or optimize within the current bracket if target == current.
         
         Args:
             deck: The current deck analysis
@@ -332,23 +333,124 @@ Keep the tone friendly and helpful - like explaining to someone at a game store.
         if not self.client:
             return self._generate_fallback_bracket_advice(deck, target_bracket)
         
-        print(f"  🤖 Generating advice to adjust to bracket {target_bracket}...")
+        current = deck.suggested_bracket
+        target_def = BRACKET_DEFINITIONS.get(target_bracket, {})
         
         # Build references
         card_reference = self._build_card_reference(deck)
         deck_overview = self._build_deck_overview(deck)
         
-        current = deck.suggested_bracket
-        target_def = BRACKET_DEFINITIONS.get(target_bracket, {})
-        direction = "null"
-        if target_bracket < current:
-            direction = "down"
-        elif current > target_bracket:
-            direction = "up"
+        # Check if this is same-bracket optimization
+        if target_bracket == current:
+            print(f"  🤖 Generating optimization advice for Bracket {target_bracket}...")
+            prompt = self._build_optimization_prompt(
+                deck, target_bracket, target_def, card_reference, deck_overview
+            )
         else:
-            direction = "within"
+            direction = "down" if target_bracket < current else "up"
+            print(f"  🤖 Generating advice to adjust to bracket {target_bracket}...")
+            prompt = self._build_adjustment_prompt(
+                deck, current, target_bracket, target_def, direction, 
+                card_reference, deck_overview
+            )
         
-        prompt = f"""You are an expert Magic: The Gathering Commander deckbuilder.
+        try:
+            message = self.client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=CLAUDE_MAX_TOKENS,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            return message.content[0].text
+            
+        except Exception as e:
+            print(f"  ❌ API error: {e}")
+            return self._generate_fallback_bracket_advice(deck, target_bracket)
+    
+    def _build_optimization_prompt(
+        self,
+        deck: DeckAnalysis,
+        bracket: int,
+        bracket_def: Dict[str, Any],
+        card_reference: str,
+        deck_overview: str
+    ) -> str:
+        """Build prompt for same-bracket optimization."""
+        return f"""You are an expert Magic: The Gathering Commander deckbuilder.
+
+CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. Use ONLY this provided text to understand what each card does - do not rely on your memory.
+
+---
+CARD REFERENCE:
+---
+
+{card_reference}
+
+---
+DECK OVERVIEW:
+---
+
+{deck_overview}
+
+---
+OPTIMIZATION REQUEST:
+---
+
+The player wants to OPTIMIZE this deck while staying at Bracket {bracket}.
+
+Bracket {bracket} ({bracket_def.get('name', 'Unknown')}) expectations:
+- Game Changers allowed: {bracket_def.get('game_changers_allowed', 'Unknown')}
+- Infinite combos: {bracket_def.get('infinite_combos', 'Unknown')}
+- Mass land denial: {'Allowed' if bracket_def.get('mass_land_denial') else 'Not allowed'}
+- Expected game length: {bracket_def.get('expected_game_length', 'Unknown')}
+
+The goal is to make the deck MORE CONSISTENT and EFFECTIVE without changing its bracket.
+
+Please provide specific, actionable advice:
+
+1. **Weak Cards to Replace**
+   - Identify 3-5 cards in this deck that underperform or don't fit the strategy
+   - Reference their oracle text to explain why they're suboptimal
+   - These should be cards that are just "okay" rather than actively bad
+
+2. **Stronger Alternatives (Same Bracket)**
+   - For each weak card, suggest 1-2 replacements that:
+     * Are more synergistic with the commander/strategy
+     * Are more efficient (better rate for mana cost)
+     * Won't push the deck into a higher bracket
+   - Explain what makes each suggestion better
+
+3. **Consistency Improvements**
+   - Suggest ways to improve card draw, tutoring, or mana consistency
+   - Identify any holes in the deck (missing removal, lacking interaction, etc.)
+   - Keep suggestions bracket-appropriate
+
+4. **Synergy Upgrades**
+   - Point out any missed synergies or "near-miss" card combinations
+   - Suggest cards that would tie the strategy together better
+
+5. **Mana Base Tune-Up**
+   - Any improvements to lands or mana rocks
+   - Consider the deck's color requirements and curve
+
+Remember: The goal is optimization, NOT power creep. All suggestions should keep the deck firmly in Bracket {bracket}.
+
+Keep it practical and specific to THIS deck."""
+
+    def _build_adjustment_prompt(
+        self,
+        deck: DeckAnalysis,
+        current: int,
+        target_bracket: int,
+        target_def: Dict[str, Any],
+        direction: str,
+        card_reference: str,
+        deck_overview: str
+    ) -> str:
+        """Build prompt for bracket adjustment (up or down)."""
+        return f"""You are an expert Magic: The Gathering Commander deckbuilder.
 
 CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. Use ONLY this provided text to understand what each card does - do not rely on your memory.
 
@@ -368,7 +470,7 @@ DECK OVERVIEW:
 ADJUSTMENT REQUEST:
 ---
 
-The player wants to adjust this deck from Bracket {current} to Bracket {target_bracket}, if they are the same, suggest appropriate improvements that wouldn't change the bracket.
+The player wants to adjust this deck from Bracket {current} to Bracket {target_bracket}.
 
 Bracket {target_bracket} ({target_def.get('name', 'Unknown')}) expectations:
 - Game Changers allowed: {target_def.get('game_changers_allowed', 'Unknown')}
@@ -381,7 +483,6 @@ Please provide specific, actionable advice:
 1. **Cards to Remove** (if moving {direction})
    - List specific cards from this deck that should come out
    - Reference their oracle text to explain why they're problematic
-   - If the target bracket is 5, it is okay to suggest a commander replacement
 
 2. **Cards to Consider Adding**
    - Suggest 5-10 replacement cards that fit the target bracket
@@ -393,6 +494,137 @@ Please provide specific, actionable advice:
    - Cards that might need to be used differently
 
 Keep it practical and specific to THIS deck."""
+    
+    def generate_cut_suggestions(
+        self,
+        deck: DeckAnalysis,
+        target_size: int = 100
+    ) -> Optional[str]:
+        """
+        Generate suggestions for cutting a deck down to the target size.
+        
+        Commander decks must be exactly 100 cards (including commander).
+        This helps players who have too many cards decide what to cut.
+        
+        Args:
+            deck: The current deck analysis
+            target_size: Target deck size (default 100 for Commander)
+        
+        Returns:
+            Markdown-formatted cut suggestions, or None if API unavailable
+        """
+        current_size = deck.total_cards
+        cards_to_cut = current_size - target_size
+        
+        if cards_to_cut <= 0:
+            return f"Deck is already at or below {target_size} cards ({current_size} total). No cuts needed!"
+        
+        if not self.client:
+            return self._generate_fallback_cut_suggestions(deck, cards_to_cut)
+        
+        print(f"  🤖 Generating suggestions to cut {cards_to_cut} card(s)...")
+        
+        # Build references
+        card_reference = self._build_card_reference(deck)
+        deck_overview = self._build_deck_overview(deck)
+        
+        # Build play pattern context so the AI understands HOW this deck plays
+        play_pattern_context = self._build_play_pattern_context(deck)
+        
+        # Fetch combo data for context
+        combo_section = self._fetch_combo_data(deck)
+        
+        prompt = f"""You are an expert Magic: The Gathering Commander deckbuilder helping a player trim their deck.
+
+CRITICAL INSTRUCTION: I am providing the exact oracle text for each card below. Use ONLY this provided text to understand what each card does - do not rely on your memory.
+
+---
+CARD REFERENCE:
+---
+
+{card_reference}
+
+---
+DECK OVERVIEW:
+---
+
+{deck_overview}
+
+---
+HOW THIS DECK PLAYS:
+---
+
+{play_pattern_context}
+
+---
+VERIFIED COMBOS IN DECK:
+---
+
+{combo_section}
+
+---
+CUT REQUEST:
+---
+
+This deck has {current_size} cards and needs to be cut down to {target_size} cards.
+That means the player needs to cut exactly {cards_to_cut} card(s).
+
+**IMPORTANT:** Before suggesting cuts, understand the deck's strategy:
+- What is the commander trying to do?
+- What are the win conditions?
+- Which cards are essential to the game plan vs. just "nice to have"?
+- Which cards enable the combos listed above?
+
+Please analyze the deck and suggest specific cards to cut. Consider:
+
+1. **Strategy Fit**
+   - Does this card actively support the commander's game plan?
+   - Consider the type of the card and if it might passively support the strategy on top of its existing effects.
+   - Would cutting this card weaken a key synergy or combo?
+   - Is this card part of the deck's identity or just filler?
+
+2. **Role Redundancy**
+   - Are there too many cards doing the same thing? (e.g., 8 board wipes when 4 would suffice)
+   - Which redundant copies are the weakest or least synergistic?
+   - Keep the versions that best fit the deck's specific strategy
+
+3. **Mana Efficiency**
+   - Are there too many expensive cards? The average CMC is {deck.average_cmc:.2f}
+   - Which high-CMC cards provide the least impact for their cost?
+   - Are there cheaper alternatives that accomplish the same goal?
+
+4. **Win-More vs. Essential**
+   - Which cards only help when you're already winning?
+   - Prioritize keeping cards that help you execute your game plan or recover
+   - Cut cards that are "cute" but don't advance your strategy
+
+5. **Combo Considerations**
+   - Do NOT suggest cutting combo pieces unless the combo is clearly not the main win condition
+   - If a card enables multiple combos, it's probably essential
+   - Cards that "only work with the combo" may be cuttable if the deck has other win conditions
+
+Please provide your response in this format:
+
+## Recommended Cuts ({cards_to_cut} cards)
+
+For each card, provide:
+- **[Card Name]** - Brief explanation of why it should be cut (referencing the deck's strategy)
+
+### Priority Tiers:
+
+**Tier 1 - Cut First (Weakest Cards):**
+(Cards that don't fit the strategy or are clearly outclassed)
+
+**Tier 2 - Strong Candidates:**
+(Cards that are cuttable but have some merit)
+
+**Tier 3 - Borderline:**
+(Cards you could cut if you need more space, but are reasonable includes)
+
+### General Notes:
+(How these cuts affect the deck's strategy and any concerns)
+
+Be specific and reference the actual cards in the deck. Aim for {cards_to_cut} total suggestions across all tiers, with a few extra borderline options in case the player disagrees with some choices."""
 
         try:
             message = self.client.messages.create(
@@ -407,7 +639,175 @@ Keep it practical and specific to THIS deck."""
             
         except Exception as e:
             print(f"  ❌ API error: {e}")
-            return self._generate_fallback_bracket_advice(deck, target_bracket)
+            return self._generate_fallback_cut_suggestions(deck, cards_to_cut)
+    
+    def _build_play_pattern_context(self, deck: DeckAnalysis) -> str:
+        """
+        Build a summary of how the deck plays to inform cut decisions.
+        
+        This gives the AI context about the deck's strategy so it doesn't
+        accidentally suggest cutting key pieces.
+        """
+        lines = []
+        
+        # Commander context
+        lines.append(f"**Commander:** {deck.commander}")
+        lines.append("")
+        
+        # Color identity
+        if deck.color_identity:
+            colors = ", ".join(deck.color_identity)
+            lines.append(f"**Color Identity:** {colors}")
+            lines.append("")
+        
+        # Detected archetypes
+        if deck.detected_archetypes:
+            lines.append("**Detected Archetypes/Strategies:**")
+            for archetype in deck.detected_archetypes:
+                lines.append(f"  - {archetype.capitalize()}")
+            lines.append("")
+        
+        # Theme information (for Bracket 1 style decks)
+        if deck.theme_description:
+            lines.append(f"**Theme:** {deck.theme_description}")
+            lines.append("")
+        
+        if deck.detected_themes:
+            lines.append("**Detected Theme Restrictions:**")
+            for theme in deck.detected_themes:
+                lines.append(f"  - {theme}")
+            lines.append("")
+        
+        # Power level indicators
+        lines.append("**Power Level Indicators:**")
+        lines.append(f"  - Suggested Bracket: {deck.suggested_bracket}")
+        lines.append(f"  - Synergy Score: {deck.synergy_score:.1f}/100")
+        
+        if deck.tutor_cards:
+            lines.append(f"  - Tutors: {len(deck.tutor_cards)} ({', '.join(deck.tutor_cards[:5])}{'...' if len(deck.tutor_cards) > 5 else ''})")
+        
+        if deck.fast_mana_cards:
+            lines.append(f"  - Fast Mana: {', '.join(deck.fast_mana_cards)}")
+        
+        if deck.game_changers_found:
+            lines.append(f"  - Game Changers: {', '.join(deck.game_changers_found)}")
+        
+        lines.append("")
+        
+        # Combo information
+        if deck.verified_combos:
+            lines.append(f"**Verified Combos:** {deck.combo_count} combo(s) found")
+            lines.append("  (See combo section below for details - DO NOT cut combo pieces without good reason)")
+            lines.append("")
+        
+        # Near-miss combos (might indicate intended strategy)
+        if deck.near_miss_combos:
+            lines.append(f"**Near-Miss Combos:** {len(deck.near_miss_combos)} combo(s) missing 1 piece")
+            lines.append("  (Player may be considering adding these)")
+            lines.append("")
+        
+        # Mana base summary
+        land_count = count_cards_with_quantity(deck.lands)
+        lines.append("**Mana Base:**")
+        lines.append(f"  - Lands: {land_count}")
+        if deck.mdfc_land_count > 0:
+            lines.append(f"  - MDFC Lands: {deck.mdfc_land_count} (effective total: {deck.effective_land_count})")
+        lines.append(f"  - Average Mana Value: {deck.average_cmc:.2f}")
+        lines.append("")
+        
+        # Strategic summary
+        lines.append("**Key Question for Cuts:**")
+        lines.append("What is this deck trying to DO? Cards that don't help achieve that goal are cut candidates.")
+        
+        return "\n".join(lines)
+    
+    def _generate_fallback_cut_suggestions(self, deck: DeckAnalysis, cards_to_cut: int) -> str:
+        """
+        Generate basic cut suggestions without AI.
+        
+        Uses heuristics to identify potential cuts based on:
+        - High CMC cards
+        - Cards that don't match detected archetypes
+        - Redundant effects
+        """
+        lines = [
+            f"# Cutting {cards_to_cut} Card(s) from Your Deck",
+            "",
+            "*Note: Full AI analysis unavailable. Set ANTHROPIC_API_KEY for detailed recommendations.*",
+            "",
+            "## Automated Analysis:",
+            "",
+        ]
+        
+        # Collect all non-land cards with their CMC
+        all_nonlands = (
+            deck.creatures + deck.artifacts + deck.enchantments +
+            deck.instants + deck.sorceries + deck.planeswalkers
+        )
+        
+        # Find high-CMC cards (potential cuts)
+        high_cmc_cards = []
+        for card in all_nonlands:
+            cmc = card.get("cmc", 0)
+            name = card.get("name", "Unknown")
+            if cmc >= 6:
+                high_cmc_cards.append((name, cmc))
+        
+        high_cmc_cards.sort(key=lambda x: x[1], reverse=True)
+        
+        if high_cmc_cards:
+            lines.append("### High Mana Value Cards to Evaluate:")
+            lines.append("*(Expensive cards should provide significant impact)*")
+            lines.append("")
+            for name, cmc in high_cmc_cards[:10]:
+                lines.append(f"- **{name}** (MV {int(cmc)}) - Is this worth the mana investment?")
+            lines.append("")
+        
+        # Check for potential redundancy in card types
+        creature_count = count_cards_with_quantity(deck.creatures)
+        instant_count = count_cards_with_quantity(deck.instants)
+        sorcery_count = count_cards_with_quantity(deck.sorceries)
+        artifact_count = count_cards_with_quantity(deck.artifacts)
+        enchantment_count = count_cards_with_quantity(deck.enchantments)
+        
+        lines.append("### Category Breakdown:")
+        lines.append("")
+        lines.append(f"- Creatures: {creature_count}")
+        lines.append(f"- Artifacts: {artifact_count}")
+        lines.append(f"- Enchantments: {enchantment_count}")
+        lines.append(f"- Instants: {instant_count}")
+        lines.append(f"- Sorceries: {sorcery_count}")
+        lines.append("")
+        
+        # Provide general guidance based on counts
+        lines.append("### General Guidance:")
+        lines.append("")
+        
+        if creature_count > 35:
+            lines.append(f"- You have {creature_count} creatures - consider if all are essential")
+        
+        if instant_count + sorcery_count > 25:
+            lines.append(f"- {instant_count + sorcery_count} instants/sorceries is high - look for redundant effects")
+        
+        if artifact_count > 15:
+            lines.append(f"- {artifact_count} artifacts - check for redundant mana rocks or equipment")
+        
+        if deck.average_cmc > 3.5:
+            lines.append(f"- Average MV of {deck.average_cmc:.2f} is high - prioritize cutting expensive cards")
+        
+        lines.extend([
+            "",
+            "### Questions to Ask Yourself:",
+            "",
+            "For each card, consider:",
+            "1. Does this card synergize with my commander?",
+            "2. How often does this card sit dead in my hand?",
+            "3. Would I be happy to draw this on turn 10? Turn 2?",
+            "4. Do I have multiple cards that do the same thing?",
+            "5. Is there a more efficient version of this effect?",
+        ])
+        
+        return "\n".join(lines)
     
     def _build_card_reference(self, deck: DeckAnalysis) -> str:
         """
@@ -679,9 +1079,55 @@ Keep it practical and specific to THIS deck."""
     def _generate_fallback_bracket_advice(self, deck: DeckAnalysis, target_bracket: int) -> str:
         """
         Generate basic bracket adjustment advice without AI.
+        Handles same-bracket optimization as well as up/down adjustments.
         """
         current = deck.suggested_bracket
         
+        # Same-bracket optimization
+        if target_bracket == current:
+            lines = [
+                f"# Optimizing Within Bracket {current}",
+                "",
+                "*Note: Full AI advice unavailable. Set ANTHROPIC_API_KEY for detailed recommendations.*",
+                "",
+                "## General Optimization Tips:",
+                "",
+                "### Consistency Improvements:",
+                "- Add more card draw to see more of your deck",
+                "- Consider 2-3 more mana rocks if running fewer than 8",
+                "- Ensure you have 10+ sources of each color you need",
+                "",
+                "### Potential Weak Spots to Address:",
+            ]
+            
+            # Check for common issues
+            land_count = deck.effective_land_count if deck.effective_land_count else len(deck.lands)
+            if land_count < 35:
+                lines.append(f"- Land count ({land_count}) is low - consider 35-38 lands")
+            if land_count > 40:
+                lines.append(f"- Land count ({land_count}) is high - could trim 2-3 for more spells")
+            
+            if deck.average_cmc > 3.5:
+                lines.append(f"- Average mana value ({deck.average_cmc:.2f}) is high - look for cheaper alternatives")
+            
+            if len(deck.tutor_cards) < 3:
+                lines.append("- Few tutors - consider adding more to find key pieces")
+            
+            creature_count = count_cards_with_quantity(deck.creatures)
+            if creature_count < 15 and "creature" not in str(deck.detected_archetypes).lower():
+                lines.append(f"- Low creature count ({creature_count}) - may struggle to block/pressure")
+            
+            lines.extend([
+                "",
+                "### Cards to Evaluate:",
+                "- Look for cards that don't synergize with your commander",
+                "- Cut cards that are 'win-more' rather than helping you catch up",
+                "- Replace taplands with untapped alternatives where budget allows",
+            ])
+            
+            return "\n".join(lines)
+        
+        # Bracket adjustment (original logic)
         lines = [
             f"# Adjusting from Bracket {current} to Bracket {target_bracket}",
             "",

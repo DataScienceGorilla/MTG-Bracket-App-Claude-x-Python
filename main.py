@@ -28,14 +28,25 @@ Examples:
 
 import sys
 import os
-from typing import Optional
+from typing import Optional, Tuple
+from pathlib import Path
+from dotenv import load_dotenv
+
+try:
+    load_dotenv(override=True)  # Override any existing env vars with .env values
+except ImportError:
+    pass  # python-dotenv not installed, rely on system env vars
+
 
 # Import our modules
 from deck_analyzer import DeckAnalyzer, DeckAnalysis, count_cards_with_quantity
 from ai_analyzer import AIPlayAnalyzer
-from dotenv import load_dotenv
 from config import BRACKET_DEFINITIONS
 
+
+# =============================================================================
+# Display Functions
+# =============================================================================
 
 def print_banner():
     """Print the app banner."""
@@ -45,7 +56,7 @@ def print_banner():
 ║        ⚔️  MTG Commander Bracket Analyzer  ⚔️                   ║
 ║                                                               ║
 ║    Analyze your deck for the WotC bracket system              ║
-║                                                               ║
+║    with AI-powered play pattern insights                      ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 """)
@@ -53,46 +64,63 @@ def print_banner():
 
 def print_section_header(title: str):
     """Print a formatted section header."""
-    print("")
-    print("=" * 60)
-    print(f"  {title}")
-    print("=" * 60)
+    print("\n" + "═" * 64)
+    print(f"  {title}".center(64))
+    print("═" * 64)
 
 
-def format_bracket_display(bracket: int) -> str:
-    """
-    Create a nice display string for a bracket number.
+def print_menu(deck: Optional[DeckAnalysis] = None):
+    """Print the main menu."""
+    print("\n" + "─" * 50)
+    print("  📋 MAIN MENU")
+    print("─" * 50)
     
-    Returns something like: "Bracket 3 (Upgraded)"
-    """
-    bracket_info = BRACKET_DEFINITIONS.get(bracket, {})
-    name = bracket_info.get("name", "Unknown")
-    return f"Bracket {bracket} ({name})"
+    if deck:
+        print(f"  Current deck: {deck.commander} (Bracket {deck.suggested_bracket})")
+        print(f"  Cards: {deck.total_cards}")
+        print("─" * 50)
+        print("  1. 📊 View deck analysis summary")
+        print("  2. 🤖 AI play pattern analysis")
+        print("  3. ✂️  Get cut suggestions" + (f" ({deck.total_cards - 100} over)" if deck.total_cards > 100 else " (at/under 100)"))
+        print("  4. 🎯 Bracket adjustment/optimization advice")
+        print("  5. 📂 Load a different deck")
+        print("  6. 🚪 Exit")
+    else:
+        print("  No deck loaded")
+        print("─" * 50)
+        print("  1. 📂 Load a deck")
+        print("  2. 🚪 Exit")
+    
+    print("─" * 50)
 
 
 def print_analysis_results(deck: DeckAnalysis):
     """
-    Print the deck analysis results in a nice format.
+    Print the analysis results in a formatted way.
     """
-    print_section_header("📊 DECK ANALYSIS RESULTS")
+    # Header with commander
+    print_section_header(f"📋 ANALYSIS: {deck.commander}")
     
-    # Basic info
+    # Bracket result (big and prominent)
+    bracket_def = BRACKET_DEFINITIONS.get(deck.suggested_bracket, {})
+    bracket_name = bracket_def.get("name", "Unknown")
+    
     print(f"""
-  Commander:        {deck.commander}
-  Color Identity:   {', '.join(deck.color_identity) or 'Colorless'}
-  Total Cards:      {deck.total_cards}
-  Average CMC:      {deck.average_cmc}
-""")
-    
-    # Bracket result (the main thing!)
-    bracket_display = format_bracket_display(deck.suggested_bracket)
-    print(f"  🎯 SUGGESTED BRACKET: {bracket_display}")
-    print("")
+       SUGGESTED BRACKET: {deck.suggested_bracket}              
+       "{bracket_name}" 
+    """)
     
     # Reasoning
-    print("  Reasoning:")
-    for reason in deck.bracket_reasoning:
-        print(f"    • {reason}")
+    if deck.bracket_reasoning:
+        print("  Reasoning:")
+        for reason in deck.bracket_reasoning:
+            print(f"    • {reason}")
+    
+    # Legality warnings (if any)
+    if deck.legality_warnings:
+        print_section_header("⚠️  LEGALITY WARNINGS")
+        for warning in deck.legality_warnings:
+            print(f"    {warning}")
     
     # Game Changers
     print_section_header("🃏 GAME CHANGERS FOUND")
@@ -133,6 +161,19 @@ def print_analysis_results(deck: DeckAnalysis):
             print(f"    ... and {len(deck.tutor_cards) - 10} more")
         print(f"\n  Total: {len(deck.tutor_cards)} tutor(s)")
     
+    # MDFCs with land backs
+    if deck.mdfc_lands:
+        print_section_header("🃏 MODAL DOUBLE-FACED CARDS (Land Backs)")
+        for mdfc in deck.mdfc_lands:
+            name = mdfc.get("name", "Unknown")
+            # Show front face name and type
+            front_name = name.split(" // ")[0] if " // " in name else name
+            type_line = mdfc.get("type_line", "")
+            front_type = type_line.split(" // ")[0] if " // " in type_line else type_line
+            print(f"    🔄 {front_name} ({front_type})")
+        print(f"\n  These {deck.mdfc_land_count} card(s) can also be played as lands")
+        print(f"  → Effective land count: {deck.effective_land_count} (actual lands + MDFCs)")
+
     # Detected archetypes
     if deck.detected_archetypes:
         print_section_header("🎭 DETECTED ARCHETYPES")
@@ -145,28 +186,38 @@ def print_analysis_results(deck: DeckAnalysis):
     
     for cmc in sorted(deck.mana_curve.keys()):
         count = deck.mana_curve[cmc]
-        bar_length = int((count / max_count) * 30)
+        bar_length = int((count / max_count) * 20)
         bar = "█" * bar_length
-        cmc_label = f"{cmc}+" if cmc == 7 else f" {cmc}"
+        cmc_label = f"{cmc}+" if cmc == 7 else f"{cmc} "
         print(f"    {cmc_label} │ {bar} ({count})")
     
     # Card composition summary
-    land_count = count_cards_with_quantity(deck.lands)
+    print_section_header("📦 CARD COMPOSITION")
+    
+    # Use count helper for accurate counts (handles duplicates like basic lands)
+    count = count_cards_with_quantity
+    
+    # Build land display string with MDFC info
+    land_count = count(deck.lands)
     if deck.mdfc_land_count > 0:
         land_str = f"{land_count:3d}  ({deck.effective_land_count} effective incl. {deck.mdfc_land_count} MDFCs)"
     else:
         land_str = f"{land_count:3d}"
-    print_section_header("📦 CARD COMPOSITION")
+    
     print(f"""
-    Creatures:     {count_cards_with_quantity(deck.creatures):3d}
-    Artifacts:     {count_cards_with_quantity(deck.artifacts):3d}
-    Enchantments:  {count_cards_with_quantity(deck.enchantments):3d}
-    Instants:      {count_cards_with_quantity(deck.instants):3d}
-    Sorceries:     {count_cards_with_quantity(deck.sorceries):3d}
-    Planeswalkers: {count_cards_with_quantity(deck.planeswalkers):3d}
+    Creatures:     {count(deck.creatures):3d}
+    Artifacts:     {count(deck.artifacts):3d}
+    Enchantments:  {count(deck.enchantments):3d}
+    Instants:      {count(deck.instants):3d}
+    Sorceries:     {count(deck.sorceries):3d}
+    Planeswalkers: {count(deck.planeswalkers):3d}
     Lands:         {land_str}
 """)
 
+
+# =============================================================================
+# Input Functions
+# =============================================================================
 
 def get_decklist_from_user() -> str:
     """
@@ -206,32 +257,28 @@ def get_commander_name() -> Optional[str]:
     return name if name else None
 
 
-def ask_for_ai_analysis() -> bool:
-    """
-    Ask if the user wants AI play pattern analysis.
-    """
-    load_dotenv()
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    
-    if not api_key:
-        print("\n💡 AI play pattern analysis is available!")
-        print("   Set ANTHROPIC_API_KEY environment variable to enable it.")
-        return False
-    
-    print("\n🤖 Would you like AI-powered play pattern analysis? (y/n)")
-    response = input("   > ").strip().lower()
-    return response in ["y", "yes", ""]
+def get_menu_choice(max_choice: int) -> int:
+    """Get a valid menu choice from the user."""
+    while True:
+        try:
+            choice = input("\n  Enter choice: ").strip()
+            if not choice:
+                continue
+            num = int(choice)
+            if 1 <= num <= max_choice:
+                return num
+            print(f"  Please enter a number between 1 and {max_choice}")
+        except ValueError:
+            print("  Please enter a valid number")
 
 
-def ask_for_bracket_adjustment(current_bracket: int) -> Optional[int]:
-    """
-    Ask if the user wants advice on adjusting to a different bracket.
-    """
-    print(f"\n🎯 Your deck is currently Bracket {current_bracket}.")
-    print("   Would you like advice on adjusting to a different bracket?")
-    print("   Enter a bracket number (1-5) or press Enter to skip:")
+def get_target_bracket(current_bracket: int) -> Optional[int]:
+    """Get target bracket for adjustment/optimization."""
+    print(f"\n  Current bracket: {current_bracket}")
+    print("  Enter target bracket (1-5), same number for optimization,")
+    print("  or press Enter to cancel:")
     
-    response = input("   > ").strip()
+    response = input("  > ").strip()
     
     if not response:
         return None
@@ -241,11 +288,205 @@ def ask_for_bracket_adjustment(current_bracket: int) -> Optional[int]:
         if 1 <= target <= 5:
             return target
         else:
-            print("   Invalid bracket number. Skipping.")
+            print("  Invalid bracket number.")
             return None
     except ValueError:
+        print("  Invalid input.")
         return None
 
+
+def get_target_deck_size() -> int:
+    """Get target deck size for cut suggestions."""
+    print("\n  Enter target deck size (default 100):")
+    response = input("  > ").strip()
+    
+    if not response:
+        return 100
+    
+    try:
+        size = int(response)
+        if 1 <= size <= 200:
+            return size
+        else:
+            print("  Invalid size, using 100.")
+            return 100
+    except ValueError:
+        print("  Invalid input, using 100.")
+        return 100
+
+
+# =============================================================================
+# Deck Loading
+# =============================================================================
+
+def load_deck_from_file(filename: str) -> Tuple[Optional[DeckAnalysis], Optional[str]]:
+    """
+    Load and analyze a deck from a file.
+    
+    Returns:
+        Tuple of (DeckAnalysis, error_message)
+        If successful, error_message is None
+        If failed, DeckAnalysis is None
+    """
+    try:
+        with open(filename, "r") as f:
+            decklist_text = f.read()
+        print(f"   ✅ Loaded {len(decklist_text.splitlines())} lines")
+    except FileNotFoundError:
+        return None, f"File not found: {filename}"
+    except Exception as e:
+        return None, f"Error reading file: {e}"
+    
+    commander_name = get_commander_name()
+    
+    # Run analysis
+    print("\n" + "─" * 60)
+    analyzer = DeckAnalyzer()
+    deck = analyzer.analyze_deck(decklist_text, commander_name)
+    
+    return deck, None
+
+
+def load_deck_interactive() -> Optional[DeckAnalysis]:
+    """
+    Load and analyze a deck from user input.
+    
+    Returns:
+        DeckAnalysis if successful, None if cancelled/empty
+    """
+    decklist_text = get_decklist_from_user()
+    
+    if not decklist_text.strip():
+        print("\n  ❌ No decklist provided.")
+        return None
+    
+    commander_name = get_commander_name()
+    
+    # Run analysis
+    print("\n" + "─" * 60)
+    analyzer = DeckAnalyzer()
+    deck = analyzer.analyze_deck(decklist_text, commander_name)
+    
+    return deck
+
+
+# =============================================================================
+# Menu Actions
+# =============================================================================
+
+def action_view_summary(deck: DeckAnalysis):
+    """Display the deck analysis summary."""
+    print_analysis_results(deck)
+
+
+def action_ai_analysis(deck: DeckAnalysis):
+    """Run AI play pattern analysis."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    
+    if not api_key:
+        print("\n  💡 AI analysis requires an API key.")
+        print("     Set ANTHROPIC_API_KEY environment variable to enable it.")
+        return
+    
+    print_section_header("🤖 AI PLAY PATTERN ANALYSIS")
+    ai_analyzer = AIPlayAnalyzer()
+    ai_insights = ai_analyzer.generate_play_pattern_analysis(deck)
+    print(ai_insights)
+
+
+def action_cut_suggestions(deck: DeckAnalysis):
+    """Generate cut suggestions."""
+    target_size = get_target_deck_size()
+    cards_to_cut = deck.total_cards - target_size
+    
+    if cards_to_cut <= 0:
+        print(f"\n  ✅ Deck is already at or below {target_size} cards ({deck.total_cards} total).")
+        print("     No cuts needed!")
+        return
+    
+    print_section_header(f"✂️  CUT SUGGESTIONS ({cards_to_cut} cards to cut)")
+    ai_analyzer = AIPlayAnalyzer()
+    cuts = ai_analyzer.generate_cut_suggestions(deck, target_size=target_size)
+    print(cuts)
+
+
+def action_bracket_advice(deck: DeckAnalysis):
+    """Generate bracket adjustment or optimization advice."""
+    target = get_target_bracket(deck.suggested_bracket)
+    
+    if target is None:
+        return
+    
+    if target == deck.suggested_bracket:
+        print_section_header(f"📋 OPTIMIZATION ADVICE FOR BRACKET {target}")
+    else:
+        print_section_header(f"📋 ADVICE: MOVING TO BRACKET {target}")
+    
+    ai_analyzer = AIPlayAnalyzer()
+    advice = ai_analyzer.generate_bracket_adjustment_advice(deck, target)
+    print(advice)
+
+
+# =============================================================================
+# Main Menu Loop
+# =============================================================================
+
+def run_menu_loop(initial_deck: Optional[DeckAnalysis] = None):
+    """
+    Run the main menu loop.
+    
+    Args:
+        initial_deck: Pre-loaded deck analysis (optional)
+    """
+    deck = initial_deck
+    
+    # Show initial analysis if deck was provided
+    if deck:
+        print_analysis_results(deck)
+    
+    while True:
+        print_menu(deck)
+        
+        if deck:
+            # Full menu with deck loaded
+            choice = get_menu_choice(6)
+            
+            if choice == 1:
+                action_view_summary(deck)
+            elif choice == 2:
+                action_ai_analysis(deck)
+            elif choice == 3:
+                action_cut_suggestions(deck)
+            elif choice == 4:
+                action_bracket_advice(deck)
+            elif choice == 5:
+                # Load new deck
+                new_deck = load_deck_interactive()
+                if new_deck:
+                    deck = new_deck
+                    print_analysis_results(deck)
+            elif choice == 6:
+                print("\n  👋 Thanks for using the Bracket Analyzer!")
+                print("     Remember: Brackets are guidelines for pregame discussion,")
+                print("     not hard rules. Talk to your playgroup! 🎲\n")
+                break
+        else:
+            # Limited menu without deck
+            choice = get_menu_choice(2)
+            
+            if choice == 1:
+                new_deck = load_deck_interactive()
+                if new_deck:
+                    deck = new_deck
+                    print_analysis_results(deck)
+            elif choice == 2:
+                print("\n  👋 Goodbye!\n")
+                break
+
+
+# =============================================================================
+# Entry Point
+# =============================================================================
 
 def main():
     """
@@ -253,67 +494,23 @@ def main():
     """
     print_banner()
     
-    # Get the decklist
-    decklist_text = ""
-    commander_name = None
+    initial_deck = None
     
+    # Check for command line argument (file path)
     if len(sys.argv) > 1:
-        # Read from file
         filename = sys.argv[1]
         print(f"📂 Reading decklist from: {filename}")
         
-        try:
-            with open(filename, "r") as f:
-                decklist_text = f.read()
-            print(f"   ✅ Loaded {len(decklist_text.splitlines())} lines")
-        except FileNotFoundError:
-            print(f"   ❌ File not found: {filename}")
-            sys.exit(1)
-        except Exception as e:
-            print(f"   ❌ Error reading file: {e}")
-            sys.exit(1)
+        deck, error = load_deck_from_file(filename)
         
-        commander_name = get_commander_name()
-    else:
-        # Get from user input
-        decklist_text = get_decklist_from_user()
-        commander_name = get_commander_name()
+        if error:
+            print(f"   ❌ {error}")
+            print("   Continuing to interactive mode...\n")
+        else:
+            initial_deck = deck
     
-    if not decklist_text.strip():
-        print("\n❌ No decklist provided. Exiting.")
-        sys.exit(1)
-    
-    # Run the analysis
-    print("\n" + "─" * 60)
-    analyzer = DeckAnalyzer()
-    deck = analyzer.analyze_deck(decklist_text, commander_name)
-    
-    # Display results
-    print_analysis_results(deck)
-    
-    # Ask about AI analysis
-    if ask_for_ai_analysis():
-        print_section_header("🤖 AI PLAY PATTERN ANALYSIS")
-        ai_analyzer = AIPlayAnalyzer()
-        ai_insights = ai_analyzer.generate_play_pattern_analysis(deck)
-        print(ai_insights)
-    
-    # Ask about bracket adjustment advice
-    target_bracket = ask_for_bracket_adjustment(deck.suggested_bracket)
-    
-    if target_bracket and target_bracket != deck.suggested_bracket:
-        print_section_header(f"📋 ADVICE: MOVING TO BRACKET {target_bracket}")
-        ai_analyzer = AIPlayAnalyzer()
-        advice = ai_analyzer.generate_bracket_adjustment_advice(deck, target_bracket)
-        print(advice)
-    
-    # Closing
-    print("\n" + "─" * 60)
-    print("✨ Analysis complete!")
-    print("")
-    print("Remember: Brackets are guidelines for pregame discussion,")
-    print("not hard rules. Talk to your playgroup! 🎲")
-    print("")
+    # Run the menu loop
+    run_menu_loop(initial_deck)
 
 
 if __name__ == "__main__":
